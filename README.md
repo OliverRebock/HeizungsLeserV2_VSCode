@@ -7,7 +7,7 @@ Heizungsleser V2 ist eine hochmoderne, mandantenfähige Plattform zur **Echtzeit
 ## 🌟 Warum Heizungsleser V2? (Vorteile)
 
 *   **Effizienzsteigerung:** Identifizieren Sie unnötiges Takten und suboptimale Heizkurven, bevor sie zu hohen Stromrechnungen führen.
-*   **KI-Expertise auf Knopfdruck:** Nutzen Sie die Power von OpenAI (GPT-4o), um komplexe Temperaturverläufe wie ein erfahrener Heizungstechniker interpretieren zu lassen.
+*   **KI-Expertise auf Knopfdruck:** Nutzen Sie die Power von OpenAI (GPT-5.4), um komplexe Temperaturverläufe wie ein erfahrener Heizungstechniker interpretieren zu lassen.
 *   **Mandantensicherheit (Multi-Tenancy):** Entwickelt für Dienstleister. Verwalten Sie hunderte Kunden in einer einzigen Oberfläche bei strikter Datentrennung.
 *   **Herstellerunabhängig:** Durch die Anbindung an Home Assistant werden Daten verschiedenster Hersteller (Viessmann, Vaillant, Wolf, Buderus etc.) einheitlich verarbeitet.
 *   **Zukunftssicher:** Modernster Tech-Stack (FastAPI, React, InfluxDB), der auf Performance und Skalierbarkeit ausgelegt ist.
@@ -50,7 +50,7 @@ Professionelles Management für Fachbetriebe:
 | **Datenbank (Meta)** | PostgreSQL | Verwaltung von Benutzern, Rollen und Mandantenstrukturen. |
 | **Datenbank (Time)** | InfluxDB 2.x | Optimiert für Millionen von Messpunkten pro Sekunde. |
 | **Frontend** | React / TypeScript | Moderne, reaktive Oberfläche mit Tailwind CSS. |
-| **KI-Integration** | OpenAI GPT-4o | Intelligente Dateninterpretation und Diagnostik. |
+| **KI-Integration** | OpenAI GPT-5.4 | Intelligente Dateninterpretation und Diagnostik. |
 | **Infrastruktur** | Docker Compose | Einfaches Deployment in Container-Umgebungen. |
 
 ---
