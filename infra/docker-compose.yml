@@ -1,0 +1,62 @@
+services:
+  backend:
+    container_name: heizungsleser-v2-backend
+    build:
+      context: ../apps/backend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../apps/backend:/app
+    env_file:
+      - ../.env
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - heizungsleser-v2-net
+
+  db:
+    container_name: heizungsleser-v2-postgres
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-heitleser_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heitleser_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-heitleser_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - heizungsleser-v2-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-heitleser_user} -d ${POSTGRES_DB:-heitleser_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - heizungsleser-v2-net
+
+  frontend:
+    container_name: heizungsleser-v2-frontend
+    build:
+      context: ../apps/frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    restart: always
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+    networks:
+      - heizungsleser-v2-net
+
+networks:
+  heizungsleser-v2-net:
+    name: heizungsleser-v2-net
+    driver: bridge
+
+volumes:
+  heizungsleser-v2-postgres-data:
+    name: heizungsleser-v2-postgres-data

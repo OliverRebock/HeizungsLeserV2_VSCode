@@ -1,0 +1,81 @@
+from typing import List, Optional, Any, Dict
+from pydantic import BaseModel, Field
+from datetime import datetime
+
+class AnalysisRequest(BaseModel):
+    start: Optional[datetime] = Field(None, alias="from")
+    end: Optional[datetime] = Field(None, alias="to")
+    entity_ids: Optional[List[str]] = Field(default_factory=list)
+    analysis_focus: Optional[str] = "Gesamtzustand, Effizienz und Taktung"
+    language: str = "de"
+    include_raw_summary: bool = False
+    
+    # New fields for deep analysis context
+    manufacturer: Optional[str] = None
+    heat_pump_type: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
+
+class Finding(BaseModel):
+    title: str
+    severity: str  # low, medium, high, critical
+    description: str
+    evidence: List[str] = Field(default_factory=list)
+
+class Anomaly(BaseModel):
+    title: str
+    description: str
+
+class DetectedErrorCode(BaseModel):
+    code: str
+    label: str
+    source_entity: str
+    source_label: str
+    observed_value: str
+
+class DeepAnalysisResponse(BaseModel):
+    device_id: int
+    device_name: str
+    start: datetime = Field(..., alias="from")
+    end: datetime = Field(..., alias="to")
+    technical_summary: str
+    diagnostic_steps: List[str] = Field(default_factory=list)
+    suspected_causes: List[str] = Field(default_factory=list)
+    technical_findings: List[Finding] = Field(default_factory=list)
+    confidence: str = "medium"
+    disclaimer: str = "Diese vertiefte Analyse ist eine technische KI-Einschätzung und ersetzt keine professionelle Fehlerdiagnose vor Ort."
+
+    class Config:
+        populate_by_name = True
+
+class ErrorCandidate(BaseModel):
+    entity_id: str
+    label: str
+    raw_value: str
+    parsed_code: Optional[str] = None
+    classification: str = "unknown"  # historical, active, unknown
+    confidence: str = "medium"
+
+class AnalysisResponse(BaseModel):
+    device_id: int
+    device_name: str
+    start: datetime = Field(..., alias="from")
+    end: datetime = Field(..., alias="to")
+    summary: str
+    overall_status: str
+    findings: List[Finding] = Field(default_factory=list)
+    anomalies: List[Anomaly] = Field(default_factory=list)
+    optimization_hints: List[str] = Field(default_factory=list)
+    detected_error_codes: List[DetectedErrorCode] = Field(default_factory=list)
+    error_candidates: List[ErrorCandidate] = Field(default_factory=list)
+    recommended_followup_checks: List[str] = Field(default_factory=list)
+    confidence: str = "medium"
+    should_trigger_error_analysis: bool = False
+    disclaimer: str = "Die Analyse ist eine datenbasierte KI-Einschätzung und ersetzt keine fachliche Vor-Ort-Prüfung."
+    raw_summary: Optional[Any] = None
+    deep_analysis_result: Optional[DeepAnalysisResponse] = None
+    analysis_run_id: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
