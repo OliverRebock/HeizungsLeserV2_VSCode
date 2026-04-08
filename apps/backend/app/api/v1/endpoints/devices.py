@@ -101,13 +101,9 @@ async def read_device_with_token(
     if not db_device:
         raise HTTPException(status_code=404, detail="Device not found")
     
-    # Zugriff nur für Admins des Tenants erlauben (Sicherheits-Check)
-    await deps.check_tenant_access(
-        db_device.tenant_id, 
-        current_user, 
-        db, 
-        required_roles=["platform_admin", "tenant_admin"]
-    )
+    # Zugriff nur für platform_admin erlauben (Sicherheits-Check gemäß Fachregel)
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only platform admins can view device tokens")
     
     return await _enrich_device_status(db_device, schema_type=DeviceWithToken)
 
@@ -119,11 +115,14 @@ async def update_device(
     device_in: DeviceUpdate,
     current_user: User = Depends(deps.get_current_user),
 ):
-    """Update a device."""
+    """Update a device. (Platform admin only)"""
     db_device = await device_service.get_device(db, device_id=device_id)
     if not db_device:
         raise HTTPException(status_code=404, detail="Device not found")
-    await deps.check_tenant_access(db_device.tenant_id, current_user, db, required_roles=["platform_admin", "tenant_admin"])
+    
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only platform admins can update devices")
+        
     return await device_service.update_device(db, db_obj=db_device, device_in=device_in)
 
 @router.delete("/{device_id}", status_code=204)
@@ -132,10 +131,13 @@ async def delete_device(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """Delete a device (nur Datensatz). Influx-Daten werden nicht automatisch gelöscht."""
+    """Delete a device (nur Datensatz). Influx-Daten werden nicht automatisch gelöscht. (Platform admin only)"""
     db_device = await device_service.get_device(db, device_id=device_id)
     if not db_device:
         raise HTTPException(status_code=404, detail="Device not found")
-    await deps.check_tenant_access(db_device.tenant_id, current_user, db, required_roles=["platform_admin", "tenant_admin"])
+        
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only platform admins can delete devices")
+        
     await device_service.delete_device(db, db_device)
     return None

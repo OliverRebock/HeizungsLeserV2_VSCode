@@ -36,42 +36,13 @@ const Dashboard = () => {
   });
 
   const { data: devices, isLoading: isDevicesLoading } = useQuery({
-    queryKey: ['devices', user?.id, user?.tenants],
+    queryKey: ['devices'],
     queryFn: async () => {
       if (!user) return [];
-
-      if (isAdmin && tenants) {
-        const allDevices: Device[] = [];
-        for (const tenant of tenants) {
-          try {
-            const resp = await api.get<Device[]>(`/devices/?tenant_id=${tenant.id}`);
-            allDevices.push(...resp.data);
-          } catch (e) {
-            console.error(`Error loading devices for tenant ${tenant.id}`, e);
-          }
-        }
-        return allDevices;
-      } else if (!isAdmin && user.tenants && user.tenants.length > 0) {
-        const allDevices: Device[] = [];
-        const processedTenantIds = new Set<number>();
-        
-        for (const t of user.tenants) {
-          const tid = (t as any).tenant_id || (t as any).id;
-          if (!tid || processedTenantIds.has(tid)) continue;
-          
-          try {
-            const resp = await api.get<Device[]>(`/devices/?tenant_id=${tid}`);
-            allDevices.push(...resp.data);
-            processedTenantIds.add(tid);
-          } catch (e) {
-            console.error(`Error loading devices for tenant ${tid}`, e);
-          }
-        }
-        return allDevices;
-      }
-      return [];
+      const resp = await api.get<Device[]>('/devices/');
+      return resp.data;
     },
-    enabled: !!user && (isAdmin ? !!tenants : true),
+    enabled: !!user,
   });
 
   if (isDevicesLoading) {

@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import api from '../lib/api';
 import { useAuthStore } from '../hooks/useAuth';
-import type { Device, AnalysisResponse, DeepAnalysisResponse, Tenant } from '../types/api';
+import type { Device, AnalysisResponse, DeepAnalysisResponse } from '../types/api';
 
 const TIME_RANGES = [
   { label: 'Letzte 24h', value: '24h' },
@@ -28,7 +28,6 @@ const TIME_RANGES = [
 
 const AnalysisPage: React.FC = () => {
   const { user } = useAuthStore();
-  const isAdmin = user?.is_superuser || user?.tenants?.some(t => t.role === 'platform_admin');
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
   const [selectedRange, setSelectedRange] = useState('24h');
@@ -40,46 +39,12 @@ const AnalysisPage: React.FC = () => {
   const [heatPumpType, setHeatPumpType] = useState('');
   const [formError, setFormError] = useState('');
 
-  // 1. Load Tenants (only for Admin)
-  const { data: tenants } = useQuery({
-    queryKey: ['tenants'],
-    queryFn: async () => {
-      if (!isAdmin) return [];
-      const response = await api.get<Tenant[]>('/tenants/');
-      return response.data;
-    },
-    enabled: !!user && isAdmin,
-  });
-
   // 2. Load Devices
   const { data: devices, isLoading: isDevicesLoading } = useQuery({
-    queryKey: ['devices', tenants],
+    queryKey: ['devices'],
     queryFn: async () => {
-      if (isAdmin && tenants) {
-        const allDevices: Device[] = [];
-        for (const tenant of tenants) {
-          try {
-            const resp = await api.get<Device[]>(`/devices/?tenant_id=${tenant.id}`);
-            allDevices.push(...resp.data);
-          } catch (e) {
-            console.error(`Error loading devices for tenant ${tenant.id}`, e);
-          }
-        }
-        return allDevices;
-      } else {
-        // For normal users, the API usually returns their devices without tenant_id filter if handled by backend
-        // or we use the tenants from their user object.
-        const allDevices: Device[] = [];
-        for (const ut of user?.tenants || []) {
-           try {
-             const resp = await api.get<Device[]>(`/devices/?tenant_id=${ut.tenant_id}`);
-             allDevices.push(...resp.data);
-           } catch (e) {
-             console.error(`Error loading devices for tenant ${ut.tenant_id}`, e);
-           }
-        }
-        return allDevices;
-      }
+      const resp = await api.get<Device[]>('/devices/');
+      return resp.data;
     },
     enabled: !!user,
   });

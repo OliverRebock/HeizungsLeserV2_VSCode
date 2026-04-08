@@ -38,12 +38,11 @@ async def create_device(db: AsyncSession, device_in: DeviceCreate) -> Device:
                 influx_db_name, 
                 description=f"HA Token for device {device_in.display_name}"
             )
-            print(f"PROVISIONING: Token result status: {token_res.get('status')}")
             if token_res["status"] == "ok":
                 generated_token = token_res["token"]
-                print("PROVISIONING: Token successfully generated")
+                print(f"PROVISIONING: Token successfully generated for device {device_in.display_name}")
             else:
-                print(f"PROVISIONING ERROR: Token generation failed: {token_res.get('error')}")
+                print(f"PROVISIONING ERROR: Token generation failed for {device_in.display_name}: {token_res.get('error')}")
     except Exception as e:
         print(f"PROVISIONING CRITICAL ERROR for device {device_in.display_name}: {e}")
 
@@ -61,7 +60,9 @@ async def create_device(db: AsyncSession, device_in: DeviceCreate) -> Device:
     db.add(db_obj)
     await db.commit()
     await db.refresh(db_obj)
-    print(f"PROVISIONING: Device persisted with ID {db_obj.id}. Token length: {len(db_obj.influx_token) if db_obj.influx_token else 0}")
+    # Maskierter Token in Log (Sicherheits-Härtung)
+    masked_token = f"{generated_token[:4]}...{generated_token[-4:]}" if generated_token and len(generated_token) > 8 else "None"
+    print(f"PROVISIONING: Device persisted with ID {db_obj.id}. Token: {masked_token}")
     return db_obj
 
 async def delete_device(db: AsyncSession, db_obj: Device) -> None:

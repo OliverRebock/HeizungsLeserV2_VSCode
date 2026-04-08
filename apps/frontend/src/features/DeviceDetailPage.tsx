@@ -111,7 +111,7 @@ const DeviceDetailPage: React.FC = () => {
   });
 
   const filteredEntities = entities?.filter(e => {
-    const matchesSearch = e.friendly_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const matchesSearch = (e.friendly_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       e.entity_id.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesDomain = domainFilter === 'all' || e.domain === domainFilter;
     const matchesKind = kindFilter === 'all' || e.data_kind === kindFilter;
@@ -148,9 +148,9 @@ const DeviceDetailPage: React.FC = () => {
     if (entity.data_kind === 'binary') type = 'status';
     else if (entity.chartable) type = 'mini-chart';
 
-    const item: DashboardItem = {
+    const item: any = {
       id: entity.entity_id,
-      title: entity.friendly_name,
+      title: entity.friendly_name || entity.entity_id,
       type
     };
 

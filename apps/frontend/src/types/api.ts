@@ -1,15 +1,15 @@
 export interface User {
   id: number;
   email: string;
-  full_name: string;
-  is_active: boolean;
+  full_name?: string;
+  is_active?: boolean;
   is_superuser: boolean;
   tenants: UserTenant[];
 }
 
 export interface UserTenant {
   tenant_id: number;
-  role: 'platform_admin' | 'tenant_admin' | 'tenant_user';
+  role: string;
   tenant_name: string;
 }
 
@@ -19,6 +19,7 @@ export interface Tenant {
   slug: string;
   is_active: boolean;
   created_at: string;
+  updated_at: string;
   influx_bucket?: string;
   influx_token?: string;
 }
@@ -31,24 +32,28 @@ export interface Device {
   source_type: string;
   influx_database_name: string;
   influx_token?: string;
+  retention_policy?: string;
+  source_config?: Record<string, any>;
   is_active: boolean;
   is_online: boolean;
   last_seen?: string;
   created_at: string;
+  updated_at: string;
 }
 
 export interface Entity {
   entity_id: string;
   domain: string;
-  friendly_name: string;
+  friendly_name?: string;
+  data_kind: string; // numeric, binary, enum, string
   chartable: boolean;
-  data_kind: 'numeric' | 'binary' | 'enum' | 'string';
-  options?: string[];
   icon?: string;
   device_class?: string;
+  unit_of_measurement?: string;
+  options?: string[];
   last_seen?: string;
   last_value?: string | number;
-  unit_of_measurement?: string;
+  source_table?: string;
 }
 
 export interface TimeSeriesPoint {
@@ -73,11 +78,10 @@ export interface TimeSeries {
 }
 
 export interface DeviceDataResponse {
-  device: Device;
+  device_id: number;
   range: {
     from: string;
-    to: string;
-    interval: string;
+    to?: string;
   };
   series: TimeSeries[];
 }
@@ -120,6 +124,15 @@ export interface DeepAnalysisResponse {
   disclaimer: string;
 }
 
+export interface ErrorCandidate {
+  entity_id: string;
+  label: string;
+  raw_value: string;
+  parsed_code?: string;
+  classification: string;
+  confidence: string;
+}
+
 export interface AnalysisResponse {
   device_id: number;
   device_name: string;
@@ -130,11 +143,13 @@ export interface AnalysisResponse {
   findings: AnalysisFinding[];
   anomalies: AnalysisAnomaly[];
   optimization_hints: string[];
-  detected_error_codes?: DetectedErrorCode[];
+  detected_error_codes: DetectedErrorCode[];
+  error_candidates?: ErrorCandidate[];
   recommended_followup_checks: string[];
   confidence: string;
   should_trigger_error_analysis: boolean;
   disclaimer: string;
   raw_summary?: any;
   deep_analysis_result?: DeepAnalysisResponse;
+  analysis_run_id?: string;
 }

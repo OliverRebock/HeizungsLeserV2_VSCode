@@ -1,7 +1,7 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '../lib/api';
-import type { Device, Tenant } from '../types/api';
+import type { Device } from '../types/api';
 import { Database, Plus, ChevronRight, Power, Activity } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../hooks/useAuth';
@@ -10,53 +10,14 @@ const DeviceListPage: React.FC = () => {
   const { user } = useAuthStore();
   const isAdmin = user?.is_superuser;
 
-  const { data: tenants } = useQuery({
-    queryKey: ['tenants'],
-    queryFn: async () => {
-      if (!isAdmin) return [];
-      const response = await api.get<Tenant[]>('/tenants/');
-      return response.data;
-    },
-    enabled: !!user && isAdmin,
-  });
-
   const { data: devices, isLoading, error } = useQuery({
-    queryKey: ['devices', user?.id, user?.tenants],
+    queryKey: ['devices'],
     queryFn: async () => {
       if (!user) return [];
-
-      if (isAdmin && tenants) {
-        const allDevices: Device[] = [];
-        for (const tenant of tenants) {
-          try {
-            const resp = await api.get<Device[]>(`/devices/?tenant_id=${tenant.id}`);
-            allDevices.push(...resp.data);
-          } catch (e) {
-            console.error(`Error loading devices for tenant ${tenant.id}`, e);
-          }
-        }
-        return allDevices;
-      } else if (!isAdmin && user.tenants && user.tenants.length > 0) {
-        const allDevices: Device[] = [];
-        const processedTenantIds = new Set<number>();
-        
-        for (const t of user.tenants) {
-          const tid = (t as any).tenant_id || (t as any).id;
-          if (!tid || processedTenantIds.has(tid)) continue;
-          
-          try {
-            const resp = await api.get<Device[]>(`/devices/?tenant_id=${tid}`);
-            allDevices.push(...resp.data);
-            processedTenantIds.add(tid);
-          } catch (e) {
-            console.error(`Error loading devices for tenant ${tid}`, e);
-          }
-        }
-        return allDevices;
-      }
-      return [];
+      const resp = await api.get<Device[]>('/devices/');
+      return resp.data;
     },
-    enabled: !!user && (isAdmin ? !!tenants : true),
+    enabled: !!user,
   });
 
   if (isLoading) {
@@ -93,10 +54,12 @@ const DeviceListPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-slate-900">Geräteübersicht</h1>
           <p className="text-slate-500">Alle registrierten Home-Assistant Instanzen</p>
         </div>
-        <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition shadow-sm">
-          <Plus className="w-5 h-5" />
-          <span>Neues Gerät</span>
-        </button>
+        {isAdmin && (
+          <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition shadow-sm">
+            <Plus className="w-5 h-5" />
+            <span>Neues Gerät</span>
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

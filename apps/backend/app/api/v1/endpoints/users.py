@@ -61,7 +61,7 @@ async def create_user(
     """
     Create new user.
     - Platform admin: Can create user for any tenant and any role.
-    - Tenant admin: Can only create user for their own tenant and only tenant_user or tenant_admin role.
+    - Tenant admin: Can only create tenant_user for their own tenant.
     """
     if not current_user.is_superuser:
         if not user_in.tenant_id:
@@ -69,8 +69,8 @@ async def create_user(
         
         await deps.check_tenant_access(user_in.tenant_id, current_user, db, required_roles=["tenant_admin"])
         
-        if user_in.role == "platform_admin":
-             raise HTTPException(status_code=403, detail="Tenant admins cannot create platform admins")
+        if user_in.role != "tenant_user":
+             raise HTTPException(status_code=403, detail="Tenant admins can only create tenant_users")
     
     user = await user_service.get_user_by_email(db, email=user_in.email)
     if user:
@@ -97,10 +97,17 @@ async def read_user_by_id(
         return user
     
     # Check if they share a tenant and current_user is admin there
+    # AND the target user is NOT a platform_admin (though they shouldn't be in a tenant as such usually, but safety first)
+    # AND the target user is a tenant_user or the same user (self-read is always okay)
+    if user.id == current_user.id:
+        return user
+
     for t in user.tenants:
-        # Check if current user is admin in this tenant
-        role = await user_service.get_user_role_in_tenant(db, current_user.id, t.tenant_id)
+        # t is a dict from User.tenants property
+        tenant_id = t.get("tenant_id")
+        role = await user_service.get_user_role_in_tenant(db, current_user.id, tenant_id)
         if role == "tenant_admin":
+            # Tenant admin can see other users in their tenant.
             return user
             
     raise HTTPException(status_code=403, detail="Not enough permissions")
@@ -121,20 +128,28 @@ async def update_user(
         raise HTTPException(status_code=404, detail="User not found")
     
     if not current_user.is_superuser:
+        if user.is_superuser:
+            raise HTTPException(status_code=403, detail="Cannot update platform admin")
+            
         # Check if current_user is admin in user's tenant
         is_allowed = False
+        target_role_in_shared_tenant = None
         for t in user.tenants:
-            role = await user_service.get_user_role_in_tenant(db, current_user.id, t.tenant_id)
+            tenant_id = t.get("tenant_id")
+            role = await user_service.get_user_role_in_tenant(db, current_user.id, tenant_id)
             if role == "tenant_admin":
-                is_allowed = True
-                break
+                target_role_in_shared_tenant = t.get("role")
+                # Rule: tenant_admin can only edit tenant_user
+                if target_role_in_shared_tenant == "tenant_user":
+                    is_allowed = True
+                    break
         
         if not is_allowed:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
+            raise HTTPException(status_code=403, detail="Not enough permissions. Tenant admins can only update tenant_users in their tenant.")
         
-        # Tenant admin cannot change role to platform_admin
-        if user_in.role == "platform_admin":
-            raise HTTPException(status_code=403, detail="Cannot promote to platform admin")
+        # Tenant admin cannot change role to anything other than tenant_user
+        if user_in.role and user_in.role != "tenant_user":
+            raise HTTPException(status_code=403, detail="Tenant admins can only assign tenant_user role")
 
     return await user_service.update_user(db, db_obj=user, user_in=user_in)
 
@@ -153,14 +168,20 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
     
     if not current_user.is_superuser:
+        if user.is_superuser:
+             raise HTTPException(status_code=403, detail="Cannot delete platform admin")
+             
         is_allowed = False
         for t in user.tenants:
-            role = await user_service.get_user_role_in_tenant(db, current_user.id, t.tenant_id)
+            tenant_id = t.get("tenant_id")
+            role = await user_service.get_user_role_in_tenant(db, current_user.id, tenant_id)
             if role == "tenant_admin":
-                is_allowed = True
-                break
+                # Only allow deleting tenant_users
+                if t.get("role") == "tenant_user":
+                    is_allowed = True
+                    break
         if not is_allowed:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
+            raise HTTPException(status_code=403, detail="Not enough permissions. Tenant admins can only delete tenant_users.")
 
     return await user_service.delete_user(db, user_id=user_id)
 
@@ -180,13 +201,21 @@ async def reset_user_password(
         raise HTTPException(status_code=404, detail="User not found")
         
     if not current_user.is_superuser:
+        if user.is_superuser:
+             raise HTTPException(status_code=403, detail="Cannot reset password for platform admin")
+
         is_allowed = False
         for t in user.tenants:
-            role = await user_service.get_user_role_in_tenant(db, current_user.id, t.tenant_id)
+            tenant_id = t.get("tenant_id")
+            role = await user_service.get_user_role_in_tenant(db, current_user.id, tenant_id)
             if role == "tenant_admin":
-                is_allowed = True
-                break
+                # Tenant admin can reset password for users in their tenant.
+                # Requirement 2 says: "Passwörter von Benutzern des eigenen Mandanten zurücksetzen"
+                # Usually this refers to tenant_users.
+                if t.get("role") == "tenant_user":
+                    is_allowed = True
+                    break
         if not is_allowed:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
+            raise HTTPException(status_code=403, detail="Not enough permissions. Tenant admins can only reset passwords for tenant_users.")
 
     return await user_service.reset_password(db, user_id=user_id, new_password=password_in.new_password)

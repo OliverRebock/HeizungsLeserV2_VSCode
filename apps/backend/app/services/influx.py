@@ -105,7 +105,7 @@ class InfluxService:
             )
             
             created_auth = authorizations_api.create_authorization(authorization=auth)
-            print(f"INFLUX_SERVICE SUCCESS: Token generated for '{bucket_name}'")
+            print(f"INFLUX_SERVICE SUCCESS: Token generated for bucket '{bucket_name}'")
             return {"status": "ok", "token": created_auth.token}
         except Exception as e:
             print(f"INFLUX_SERVICE CRITICAL ERROR creating token for {bucket_name}: {e}")

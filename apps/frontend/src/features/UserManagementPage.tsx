@@ -104,7 +104,7 @@ const UserManagementPage: React.FC = () => {
       password: '',
       password_confirm: '',
       role: 'tenant_user',
-      tenant_id: isAdmin ? '' : (currentUser?.tenants[0]?.tenant_id.toString() || ''),
+      tenant_id: isAdmin ? '' : (currentUser?.tenants?.[0]?.tenant_id.toString() || ''),
       is_active: true
     });
     setEditingUser(null);
@@ -120,7 +120,7 @@ const UserManagementPage: React.FC = () => {
       password_confirm: '',
       role: mainTenant?.role || 'tenant_user',
       tenant_id: mainTenant?.tenant_id.toString() || '',
-      is_active: user.is_active
+      is_active: user.is_active ?? true
     });
     setIsEditModalOpen(true);
   };
@@ -153,10 +153,16 @@ const UserManagementPage: React.FC = () => {
     }
   };
 
-  const filteredUsers = users?.filter(u => 
-    u.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    (u.full_name && u.full_name.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const filteredUsers = users?.filter(u => {
+    if (!isAdmin) {
+      // Rule: tenant_admin can only see tenant_users (or themselves)
+      const targetIsSelf = u.id === currentUser?.id;
+      const targetIsTenantUser = u.tenants.some(t => t.role === 'tenant_user');
+      if (!targetIsSelf && !targetIsTenantUser) return false;
+    }
+    return u.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
+           (u.full_name && u.full_name.toLowerCase().includes(searchTerm.toLowerCase()));
+  });
 
   const getRoleBadge = (role: string) => {
     switch(role) {
@@ -238,7 +244,14 @@ const UserManagementPage: React.FC = () => {
                     <td colSpan={4} className="px-6 py-12 text-center text-slate-400">Keine Benutzer gefunden.</td>
                   </tr>
                 ) : (
-                  filteredUsers?.map(u => (
+                  filteredUsers?.map(u => {
+                    const isSelf = u.id === currentUser?.id;
+                    const targetIsTenantUser = u.tenants.some(t => t.role === 'tenant_user');
+                    const canEdit = isAdmin || (targetIsTenantUser && !isSelf); // self-edit usually via profile, but let's keep it consistent with backend
+                    const canReset = isAdmin || targetIsTenantUser;
+                    const canDelete = isAdmin || (targetIsTenantUser && !isSelf);
+
+                    return (
                     <tr key={u.id} className="hover:bg-slate-50 transition">
                       <td className="px-6 py-4">
                         {u.is_active ? (
@@ -269,31 +282,38 @@ const UserManagementPage: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <button 
-                            onClick={() => handleEdit(u)}
-                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                            title="Bearbeiten"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button 
-                            onClick={() => { setEditingUser(u); setIsResetModalOpen(true); }}
-                            className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition"
-                            title="Passwort zurücksetzen"
-                          >
-                            <Key className="w-4 h-4" />
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(u.id)}
-                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                            title="Löschen"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canEdit && (
+                            <button 
+                              onClick={() => handleEdit(u)}
+                              className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                              title="Bearbeiten"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canReset && (
+                            <button 
+                              onClick={() => { setEditingUser(u); setIsResetModalOpen(true); }}
+                              className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition"
+                              title="Passwort zurücksetzen"
+                            >
+                              <Key className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button 
+                              onClick={() => handleDelete(u.id)}
+                              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                              title="Löschen"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -367,7 +387,7 @@ const UserManagementPage: React.FC = () => {
                     onChange={(e) => setFormData({...formData, role: e.target.value})}
                   >
                     <option value="tenant_user">Benutzer</option>
-                    <option value="tenant_admin">Mandanten Admin</option>
+                    {isAdmin && <option value="tenant_admin">Mandanten Admin</option>}
                     {isAdmin && <option value="platform_admin">Plattform Admin</option>}
                   </select>
                 </div>
