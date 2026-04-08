@@ -310,30 +310,20 @@ const DeviceDetailPage: React.FC = () => {
       const sortedPoints = [...s.points].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
       const seriesData = sortedPoints.map(p => [new Date(p.ts).getTime(), p.value ?? null]);
       console.log(`Series ${s.friendly_name} (${s.entity_id}) data points:`, seriesData.length);
-
-      const color = getSeriesColor(idx);
-      const isInstant = s.value_semantics === 'instant';
-
       return {
         id: s.entity_id,
         name: s.friendly_name,
         type: 'line',
-        showSymbol: isInstant, // Show dots for instant values
-        symbolSize: isInstant ? 4 : 0,
-        step: isInstant ? false : 'end', // Stateful values use steps, instant values connect directly or use symbols
-        smooth: isInstant, // Instant values look better smoothed or direct, stateful MUST be end-step
+        showSymbol: false,
+        step: 'end',
+        smooth: false,
         connectNulls: false,
-        lineStyle: { 
-          width: 2.5, 
-          color: color,
-          type: isInstant ? 'dashed' : 'solid', // Visual hint for instant values
-          opacity: isInstant ? 0.8 : 1
-        },
-        itemStyle: { color: color },
-        areaStyle: isInstant ? undefined : { // Only show area for stateful values
+        lineStyle: { width: 2.5, color: getSeriesColor(idx) },
+        itemStyle: { color: getSeriesColor(idx) },
+        areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: `${color}20` },
-            { offset: 1, color: `${color}00` }
+            { offset: 0, color: `${getSeriesColor(idx)}20` },
+            { offset: 1, color: `${getSeriesColor(idx)}00` }
           ])
         },
         data: seriesData

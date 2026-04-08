@@ -202,38 +202,6 @@ class InfluxService:
             
         return cleaned_name
 
-    def _get_value_semantics(self, eid: str, unit: Optional[str] = None) -> str:
-        """
-        Derives the semantic meaning of a value based on its ID, unit, or friendly name.
-        Classifies numeric values into:
-        - stateful: Values that naturally hold their state until a change occurs (e.g. Temperature, Pressure)
-        - instant: Instantaneous/Output-based values that represent activity/power (e.g. W, kW, Power)
-        - default: Standard fallback
-        """
-        lower_eid = eid.lower()
-        lower_unit = unit.lower() if unit else ""
-        
-        # Instant/Output keywords (typically power, power output, watt, etc.)
-        instant_keywords = ["power", "leistung", "current_flow", "verbrauch", "output", "active_power", "apparent_power"]
-        instant_units = ["w", "kw", "va", "var", "hz"] # Watt, Kilowatt, Volt-Ampere, Hertz
-        
-        # Stateful keywords (typically temperatures, pressure, setpoints, battery levels)
-        stateful_keywords = ["temp", "druck", "pressure", "battery", "soc", "level", "setpoint", "target", "humidity", "feuchtigkeit"]
-        stateful_units = ["°c", "c", "%", "bar", "psi"]
-        
-        if any(kw in lower_eid for kw in instant_keywords) or lower_unit in instant_units:
-            return "instant"
-            
-        if any(kw in lower_eid for kw in stateful_keywords) or lower_unit in stateful_units:
-            return "stateful"
-            
-        # Domain-based fallback
-        domain = eid.split('.')[0] if '.' in eid else "sensor"
-        if domain in ["binary_sensor", "switch", "lock", "input_boolean"]:
-            return "stateful" # Binary states are stateful
-            
-        return "default"
-
     def _get_data_kind(self, domain: str, eid: str) -> str:
         """
         Derives data kind from domain and entity id.
@@ -297,13 +265,11 @@ class InfluxService:
                         
                         # Basis-Entität hinzufügen
                         domain = eid.split('.')[0] if '.' in eid else "sensor"
-                        data_kind = self._get_data_kind(domain, eid)
                         entities.append(Entity(
                             entity_id=eid,
                             domain=domain,
                             friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
-                            data_kind=data_kind,
-                            value_semantics=self._get_value_semantics(eid),
+                            data_kind=self._get_data_kind(domain, eid),
                             chartable=True,
                             source_table="multiple"
                         ))
@@ -356,8 +322,6 @@ class InfluxService:
                         if m.get("domain"):
                             ent.domain = m.get("domain")
                             ent.data_kind = self._get_data_kind(ent.domain, ent.entity_id)
-                        
-                        ent.value_semantics = self._get_value_semantics(ent.entity_id, ent.unit_of_measurement)
 
                         # LAST VALUE LOGIK
                         # Wir probieren verschiedene Felder für den aktuellen Wert
@@ -388,13 +352,11 @@ class InfluxService:
                             continue
                         seen_ids.add(eid)
                         domain = eid.split('.')[0]
-                        data_kind = "binary" if domain == "binary_sensor" else "numeric"
                         entities.append(Entity(
                             entity_id=eid,
                             domain=domain,
                             friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
-                            data_kind=data_kind,
-                            value_semantics=self._get_value_semantics(eid),
+                            data_kind="binary" if domain == "binary_sensor" else "numeric",
                             chartable=True,
                             source_table=eid
                         ))
@@ -520,14 +482,12 @@ class InfluxService:
                             freshness_info = f"Vor {int(diff.days)} Tagen"
 
                 data_kind = self._get_data_kind(eid.split('.')[0] if '.' in eid else "sensor", eid)
-                value_semantics = self._get_value_semantics(eid)
                 
                 results.append(DashboardEntityData(
                     entity_id=eid,
                     friendly_name=friendly_name,
                     domain=eid.split('.')[0] if '.' in eid else "sensor",
                     data_kind=data_kind,
-                    value_semantics=value_semantics,
                     latest_point=latest_point,
                     sparkline=sparkline_points,
                     is_stale=is_stale,
@@ -741,8 +701,6 @@ class InfluxService:
                 logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")
                 
             # 3. Carry Forward zum Endzeitpunkt (Last point to end of range)
-            value_semantics = self._get_value_semantics(eid, unit_of_measurement)
-            
             if points:
                 # Sortieren um sicherzustellen, dass wir den wirklich letzten haben
                 points.sort(key=lambda p: p.ts)
@@ -760,13 +718,9 @@ class InfluxService:
                     final_end_ts = dt_final.now(tz_berlin).isoformat()
                 
                 # Nur wenn der letzte Punkt zeitlich vor dem Ende liegt (ISO string compare)
-                # UND wenn es KEINE instant_numeric Entität ist (Leistungswerte etc.)
                 if last_p.ts < final_end_ts:
-                    if value_semantics != "instant":
-                        points.append(DataPoint(ts=final_end_ts, value=last_p.value, state=last_p.state))
-                        logger.debug(f"INFLUX_SERVICE: Carrying forward last value for {eid} to absolute end: {final_end_ts}")
-                    else:
-                        logger.debug(f"INFLUX_SERVICE: Skipping carry-forward for instant_numeric entity: {eid}")
+                    points.append(DataPoint(ts=final_end_ts, value=last_p.value, state=last_p.state))
+                    logger.debug(f"INFLUX_SERVICE: Carrying forward last value for {eid} to absolute end: {final_end_ts}")
 
             # --- NEU: Double Padding am Anfang für Step-Lines (HA-Style) ---
             # Um schräge Linien vom Start zum ersten echten Punkt zu vermeiden, 
@@ -805,7 +759,6 @@ class InfluxService:
                 friendly_name=friendly_name,
                 domain=domain,
                 data_kind=data_kind,
-                value_semantics=value_semantics,
                 chartable=True,
                 points=sorted(points, key=lambda p: p.ts),
                 meta={
