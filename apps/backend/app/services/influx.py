@@ -764,6 +764,24 @@ class InfluxService:
                 if "T" not in str(final_end_ts):
                     final_end_ts = now_utc.isoformat()
                 
+                # Wir prüfen, ob das Ende des Zeitraums in der Nähe von "jetzt" liegt (innerhalb von 5 Min)
+                # Falls ja, wenden wir die Timeout-Logik (15 Min auf 0) an.
+                # Falls nein (z.B. Ansicht "Gestern"), ziehen wir den Wert einfach bis zum Ende des Zeitraums durch.
+                is_near_now = False
+                try:
+                    ts_end_to_parse = final_end_ts.replace('Z', '+00:00')
+                    dt_end = datetime.fromisoformat(ts_end_to_parse)
+                    if dt_end.tzinfo is None:
+                        dt_end = dt_end.replace(tzinfo=dt_timezone.utc)
+                    
+                    # Wenn das Ende des Graphen weniger als 5 Min von JETZT entfernt ist
+                    if abs((now_utc - dt_end).total_seconds()) < 300:
+                        is_near_now = True
+                except:
+                    # Fallback auf True für relative Zeitangaben wie "now()"
+                    if "now" in str(end_rfc).lower():
+                        is_near_now = True
+
                 # Nur wenn der letzte Punkt zeitlich vor dem Ende liegt (ISO string compare)
                 if last_p.ts < final_end_ts:
                     carry_value = last_p.value
@@ -779,12 +797,25 @@ class InfluxService:
                             if dt_last.tzinfo is None:
                                 dt_last = dt_last.replace(tzinfo=dt_timezone.utc)
                             
+                            # Wenn wir uns am aktuellen Rand befinden (HEUTE / JETZT):
                             # Wenn der letzte Punkt älter als 15 Minuten ist, fallen wir am Rand auf 0
-                            diff_seconds = (now_utc - dt_last).total_seconds()
-                            if diff_seconds > 900: # 15 * 60
-                                carry_value = 0.0
-                                carry_state = f"0.0 (Timeout: {int(diff_seconds/60)}m alt)"
-                                logger.debug(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), falling to 0 at end.")
+                            if is_near_now:
+                                diff_seconds = (now_utc - dt_last).total_seconds()
+                                if diff_seconds > 900: # 15 * 60
+                                    carry_value = 0.0
+                                    carry_state = f"0.0 (Timeout: {int(diff_seconds/60)}m alt)"
+                                    logger.debug(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), falling to 0 at end.")
+                            else:
+                                # Wir sind in einer historischen Ansicht (z.B. GESTERN).
+                                # Hier fallen wir AUCH auf 0 am Ende des Zeitraums, wenn der letzte Punkt 
+                                # vor dem Ende des Zeitraums lag und wir wissen, dass danach nichts mehr kam.
+                                # Der Benutzer möchte das Verhalten von HEUTE (auf 0 fallen) auch hier.
+                                diff_to_end = (dt_end - dt_last).total_seconds()
+                                if diff_to_end > 900:
+                                    carry_value = 0.0
+                                    carry_state = "0.0 (Historical Timeout)"
+                                    logger.debug(f"INFLUX_SERVICE: Historical timeout for {eid} at {final_end_ts}")
+                                    
                         except Exception as e:
                             logger.error(f"INFLUX_SERVICE: Error calculating timeout for {eid}: {e}")
 
