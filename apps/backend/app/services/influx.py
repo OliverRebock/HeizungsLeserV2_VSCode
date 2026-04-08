@@ -6,7 +6,7 @@ from influxdb_client.domain.permission_resource import PermissionResource
 from influxdb_client.domain.authorization import Authorization
 from app.core.config import settings
 from app.models.device import Device
-from app.schemas.influx import Entity, DataPoint, TimeSeriesResponse
+from app.schemas.influx import Entity, DataPoint, TimeSeriesResponse, DashboardEntityData, DashboardDataPoint
 import json
 import pytz
 import logging
