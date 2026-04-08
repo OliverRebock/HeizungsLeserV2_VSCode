@@ -331,60 +331,110 @@ const DeviceDetailPage: React.FC = () => {
     })
   });
 
-  const binaryOptions = (seriesList: TimeSeries[]) => ({
-    tooltip: { 
-      trigger: 'axis', 
-      axisPointer: { type: 'cross' },
-      backgroundColor: 'rgba(255, 255, 255, 0.95)',
-      borderColor: '#e2e8f0',
-      borderWidth: 1,
-      textStyle: { color: '#1e293b', fontSize: 12 },
-      formatter: (params: any) => {
-        if (!params || params.length === 0) return '';
-        let res = `<div class="font-bold text-slate-800 mb-1 border-b pb-1 border-slate-100">${params[0].axisValueLabel}</div>`;
-        params.forEach((p: any) => {
-          const val = p.data[1];
-          const label = val === 1 ? 'An' : 'Aus';
-          res += `<div class="flex items-center justify-between gap-4 py-0.5">
-                    <div class="flex items-center gap-2">
-                      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:${p.color};"></span>
-                      <span class="text-slate-600 font-medium">${p.seriesName}</span>
-                    </div>
-                    <span class="font-bold ${val === 1 ? 'text-green-600' : 'text-slate-400'}">${label}</span>
-                  </div>`;
-        });
-        return res;
-      }
-    },
-    grid: { left: '3%', right: '3%', bottom: 30, top: 10, containLabel: true },
-    xAxis: { 
-      type: 'time', 
-      boundaryGap: false,
-      axisLabel: { color: '#94a3b8', fontSize: 10 }
-    },
-    yAxis: { 
-      type: 'category', 
-      data: ['Aus', 'An'], 
-      boundaryGap: false,
-      axisLabel: { color: '#94a3b8', fontSize: 10 },
-      axisLine: { show: false },
-      splitLine: { lineStyle: { color: '#f1f5f9' } }
-    },
-    series: seriesList.map((s, idx) => ({
-      id: s.entity_id,
-      name: s.friendly_name,
-      type: 'line',
-      step: 'end',
-      showSymbol: false,
-      connectNulls: false,
-      lineStyle: { width: 2.5, color: getSeriesColor(idx) },
-      itemStyle: { color: getSeriesColor(idx) },
-      areaStyle: { color: getSeriesColor(idx), opacity: 0.1 },
-      data: [...s.points]
-        .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
-        .map(p => [new Date(p.ts).getTime(), p.value ? 1 : 0])
-    }))
-  });
+  const binaryOptions = (seriesList: TimeSeries[]) => {
+    // In Home Assistant, state history is shown as horizontal bars.
+    // We achieve this by mapping each series to its own row.
+    return {
+      tooltip: { 
+        trigger: 'axis', 
+        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.05)', width: 1 } },
+        backgroundColor: 'rgba(255, 255, 255, 0.98)',
+        borderColor: '#e2e8f0',
+        borderWidth: 1,
+        textStyle: { color: '#1e293b', fontSize: 12 },
+        extraCssText: 'box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border-radius: 8px; padding: 10px;',
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          // Only show unique series in tooltip to avoid clutter
+          const seen = new Set();
+          let res = `<div class="font-bold text-slate-800 mb-2 border-b pb-1 border-slate-100">${params[0].axisValueLabel}</div>`;
+          params.forEach((p: any) => {
+            if (seen.has(p.seriesId)) return;
+            seen.add(p.seriesId);
+            const val = p.data[1];
+            const isAn = val === 1 || val === (p.seriesIndex + 1);
+            const label = isAn ? 'An' : 'Aus';
+            res += `<div class="flex items-center justify-between gap-6 py-0.5">
+                      <div class="flex items-center gap-2">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${p.color};"></span>
+                        <span class="text-slate-500 font-medium">${p.seriesName}</span>
+                      </div>
+                      <span class="font-bold ${isAn ? 'text-blue-600' : 'text-slate-400'}">${label}</span>
+                    </div>`;
+          });
+          return res;
+        }
+      },
+      grid: { 
+        left: 120, // Space for names on the left
+        right: '3%', 
+        bottom: 30, 
+        top: 10, 
+        containLabel: false 
+      },
+      xAxis: { 
+        type: 'time', 
+        boundaryGap: false,
+        axisLabel: { 
+          color: '#94a3b8', 
+          fontSize: 10,
+          formatter: (value: number) => {
+            const date = new Date(value);
+            return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          }
+        },
+        axisLine: { show: false },
+        splitLine: { show: true, lineStyle: { color: '#f8fafc' } }
+      },
+      yAxis: { 
+        type: 'value',
+        min: 0,
+        max: seriesList.length,
+        interval: 1,
+        axisLabel: { 
+          show: true,
+          color: '#64748b',
+          fontSize: 10,
+          fontWeight: 600,
+          formatter: (value: number) => {
+            if (value <= 0 || value > seriesList.length) return '';
+            const s = seriesList[seriesList.length - Math.round(value)];
+            return s?.friendly_name || '';
+          }
+        },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { 
+          show: true, 
+          lineStyle: { color: '#f1f5f9', type: 'dashed' } 
+        }
+      },
+      series: seriesList.map((s, idx) => {
+        // We invert the index so the first entity is at the top
+        const rowIdx = seriesList.length - idx;
+        const color = getSeriesColor(idx);
+        
+        return {
+          id: s.entity_id,
+          name: s.friendly_name,
+          type: 'line',
+          step: 'end',
+          showSymbol: false,
+          connectNulls: false,
+          lineStyle: { width: 0 }, // Hide the line
+          areaStyle: {
+            color: color,
+            opacity: 0.8,
+            origin: 'start'
+          },
+          // Map values to rows: Aus = rowIdx - 1 (bottom of row), An = rowIdx (top of row)
+          data: [...s.points]
+            .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
+            .map(p => [new Date(p.ts).getTime(), p.value ? rowIdx : rowIdx - 0.95])
+        };
+      })
+    };
+  };
 
   const enumOptions = (s: TimeSeries) => {
     const cats = Array.from(new Set((s.points.map(p => p.state).filter(Boolean) as string[]).concat((s as any).meta?.options || [])));
@@ -936,7 +986,10 @@ const DeviceDetailPage: React.FC = () => {
 
                         {/* Binär gemeinsam */}
                         {buildPanels().binaries.length > 0 && (
-                          <div className="h-[250px] border-b border-slate-50 pb-6 last:border-0 last:pb-0">
+                          <div 
+                            className="border-b border-slate-50 pb-6 last:border-0 last:pb-0"
+                            style={{ height: `${Math.max(150, buildPanels().binaries.length * 45 + 80)}px` }}
+                          >
                             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Status-Verlauf (An/Aus)</div>
                             <ReactECharts
                               option={binaryOptions(buildPanels().binaries)}
@@ -1149,7 +1202,14 @@ const DeviceDetailPage: React.FC = () => {
                 </div>
 
                 {/* Chart Area */}
-                <div className="bg-slate-50 rounded-2xl border border-slate-100 p-4 h-[350px] relative overflow-hidden">
+                <div 
+                  className="bg-slate-50 rounded-2xl border border-slate-100 p-4 relative overflow-hidden transition-all duration-300"
+                  style={{ 
+                    height: modalChartData?.series?.[0]?.data_kind === 'binary' 
+                      ? '200px' 
+                      : '350px' 
+                  }}
+                >
                   {isModalChartLoading ? (
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white/50 backdrop-blur-[2px] z-10">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
