@@ -4,7 +4,7 @@ def list_measurements():
     url = 'http://10.8.0.1:8086'
     token = '-hBacWyE-7_nWSH2N4-UjV2p2yXbst7B00ir3TjJagiGMR7bpqR4HYuY1R6a8mOcifKgdtIH47uK9zCoqUHG2Q=='
     org = 'heizungsleser'
-    bucket = 'ha_Input_beyer1V2'
+    bucket = 'ha_Input_rebock'
     
     print(f"Connecting to {url} (Bucket: {bucket})...")
     with InfluxDBClient(url=url, token=token, org=org, timeout=10000) as client:

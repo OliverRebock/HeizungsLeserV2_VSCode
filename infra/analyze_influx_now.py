@@ -1,6 +1,7 @@
 from influxdb_client import InfluxDBClient
+from datetime import datetime, timezone
 
-def list_last_points():
+def analyze_points():
     url = 'http://10.8.0.1:8086'
     token = '-hBacWyE-7_nWSH2N4-UjV2p2yXbst7B00ir3TjJagiGMR7bpqR4HYuY1R6a8mOcifKgdtIH47uK9zCoqUHG2Q=='
     org = 'heizungsleser'
@@ -8,32 +9,34 @@ def list_last_points():
     
     print(f"Connecting to {url} (Bucket: {bucket})...")
     with InfluxDBClient(url=url, token=token, org=org, timeout=10000) as client:
-        # Wir suchen nach dem letzten Punkt ÜBERHAUPT für die gesuchten Entities (unbegrenzter Zeitbereich)
         entities = ["boiler_compressor_current_power", "boiler_compressor_power_output"]
         
+        # Heutiges Datum ab 17:00 Uhr UTC bis JETZT
+        # Wir fragen die letzten 3 Stunden ab
         for entity in entities:
-            print(f"\nSuche nach Entity: {entity}")
-            # range(start: 0) sucht seit Beginn des Buckets
+            print(f"\n--- Analyse fÃ¼r {entity} ---")
             query = f'''
             from(bucket: "{bucket}")
-            |> range(start: 0)
+            |> range(start: -3h)
             |> filter(fn: (r) => r["entity_id"] == "{entity}")
-            |> last()
+            |> filter(fn: (r) => r["_field"] == "value")
             '''
             try:
                 tables = client.query_api().query(query)
                 if not tables:
-                    print(f"Keine Daten fÃ¼r '{entity}' im gesamten Bucket gefunden.")
-                    continue
-                    
-                for table in tables:
-                    for record in table.records:
-                        print(f"Zeitpunkt: {record.get_time()}")
-                        print(f"Wert: {record.get_value()}")
-                        print(f"Feld: {record.get_field()}")
-                        print(f"Entity: {record.values.get('entity_id')}")
+                    print(f"Keine Daten fÃ¼r '{entity}' in den letzten 3h gefunden.")
+                else:
+                    points = []
+                    for table in tables:
+                        for record in table.records:
+                            points.append((record.get_time(), record.get_value()))
+                    points.sort(key=lambda x: x[0])
+                    print(f"Gefundene Punkte: {len(points)}")
+                    for p in points:
+                        print(f"  {p[0]} -> {p[1]}")
+                        
             except Exception as e:
                 print(f"Fehler bei der Abfrage von {entity}: {e}")
 
 if __name__ == '__main__':
-    list_last_points()
+    analyze_points()
