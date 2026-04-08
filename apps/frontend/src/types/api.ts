@@ -46,6 +46,7 @@ export interface Entity {
   domain: string;
   friendly_name?: string;
   data_kind: string; // numeric, binary, enum, string
+  value_semantics?: string; // default, instant, stateful
   chartable: boolean;
   icon?: string;
   device_class?: string;
@@ -67,6 +68,7 @@ export interface TimeSeries {
   friendly_name: string;
   domain: string;
   data_kind: string;
+  value_semantics?: string;
   chartable: boolean;
   points: TimeSeriesPoint[];
   meta: {
@@ -98,6 +100,7 @@ export interface DashboardEntityData {
   friendly_name: string;
   domain: string;
   data_kind: string;
+  value_semantics?: string;
   latest_point?: DashboardDataPoint;
   sparkline: DashboardDataPoint[];
   is_stale: boolean;
