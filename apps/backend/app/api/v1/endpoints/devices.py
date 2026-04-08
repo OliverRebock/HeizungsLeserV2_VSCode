@@ -1,5 +1,6 @@
 from typing import List, Optional
 import datetime
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
@@ -8,6 +9,8 @@ from app.schemas.device import Device, DeviceCreate, DeviceUpdate, DeviceWithTok
 from app.services import device as device_service
 from app.services.influx import influx_service
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -32,7 +35,7 @@ async def _enrich_device_status(db_device: any, schema_type=Device) -> Device:
             # Kein Zeitstempel gefunden -> offline
             device_data.is_online = False
     except Exception as e:
-        print(f"ERROR: Failed to enrich device status for '{db_device.display_name}': {e}")
+        logger.warning(f"Failed to enrich device status for '{db_device.display_name}': {e}")
         device_data.is_online = False
     
     return device_data

@@ -9,8 +9,11 @@ from app.models.device import Device
 from app.schemas.influx import Entity, DataPoint, TimeSeriesResponse
 import json
 import pytz
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 class InfluxService:
     def __init__(self, host: str, token: str, org: str):
@@ -35,16 +38,16 @@ class InfluxService:
         Erstellt einen InfluxDB 2 Bucket.
         """
         try:
-            print(f"INFLUX_SERVICE: Creating bucket '{db_name}' in org '{self.org}'")
+            logger.info(f"INFLUX_SERVICE: Creating bucket '{db_name}' in org '{self.org}'")
             buckets_api = self.client.buckets_api()
             # Prüfen ob Bucket existiert
             try:
                 existing = buckets_api.find_bucket_by_name(db_name)
                 if existing:
-                    print(f"INFLUX_SERVICE: Bucket '{db_name}' already exists (ID: {existing.id})")
+                    logger.info(f"INFLUX_SERVICE: Bucket '{db_name}' already exists (ID: {existing.id})")
                     return {"status": "exists", "id": existing.id}
             except Exception as e:
-                print(f"INFLUX_SERVICE: Bucket check error (safe to ignore): {e}")
+                logger.debug(f"INFLUX_SERVICE: Bucket check error (safe to ignore): {e}")
             
             # Retention konfigurieren (für v2 API über PostBucketRequest oder Bucket Objekt)
             retention_rules = []
@@ -57,19 +60,19 @@ class InfluxService:
             org_api = self.client.organizations_api()
             orgs = org_api.find_organizations(org=self.org)
             if not orgs:
-                print(f"INFLUX_SERVICE ERROR: Organization '{self.org}' not found!")
+                logger.error(f"INFLUX_SERVICE ERROR: Organization '{self.org}' not found!")
                 return {"status": "error", "error": f"Organization {self.org} not found"}
             org_id = orgs[0].id
-            print(f"INFLUX_SERVICE: Found Org ID {org_id}")
+            logger.debug(f"INFLUX_SERVICE: Found Org ID {org_id}")
 
             # Bucket erstellen (In v2 nutzt man oft das Bucket Objekt direkt)
             bucket_obj = Bucket(name=db_name, org_id=org_id, retention_rules=retention_rules)
             
             bucket = buckets_api.create_bucket(bucket=bucket_obj)
-            print(f"INFLUX_SERVICE SUCCESS: Bucket '{db_name}' created with ID {bucket.id}")
+            logger.info(f"INFLUX_SERVICE SUCCESS: Bucket '{db_name}' created with ID {bucket.id}")
             return {"status": "ok", "id": bucket.id}
         except Exception as e:
-            print(f"INFLUX_SERVICE CRITICAL ERROR creating bucket {db_name}: {e}")
+            logger.exception(f"INFLUX_SERVICE CRITICAL ERROR creating bucket {db_name}")
             return {"status": "error", "error": str(e)}
 
     async def create_service_token(self, bucket_name: str, description: str) -> Dict[str, Any]:
@@ -77,7 +80,7 @@ class InfluxService:
         Erstellt einen Token mit Read/Write Berechtigungen für einen spezifischen Bucket.
         """
         try:
-            print(f"INFLUX_SERVICE: Generating token for bucket '{bucket_name}'")
+            logger.info(f"INFLUX_SERVICE: Generating token for bucket '{bucket_name}'")
             authorizations_api = self.client.authorizations_api()
             
             # Org ID finden
@@ -91,7 +94,7 @@ class InfluxService:
             buckets_api = self.client.buckets_api()
             bucket = buckets_api.find_bucket_by_name(bucket_name)
             if not bucket:
-                print(f"INFLUX_SERVICE ERROR: Cannot generate token, bucket '{bucket_name}' not found!")
+                logger.error(f"INFLUX_SERVICE ERROR: Cannot generate token, bucket '{bucket_name}' not found!")
                 return {"status": "error", "error": f"Bucket {bucket_name} not found"}
             
             # Berechtigungen definieren
@@ -105,10 +108,10 @@ class InfluxService:
             )
             
             created_auth = authorizations_api.create_authorization(authorization=auth)
-            print(f"INFLUX_SERVICE SUCCESS: Token generated for bucket '{bucket_name}'")
+            logger.info(f"INFLUX_SERVICE SUCCESS: Token generated for bucket '{bucket_name}'")
             return {"status": "ok", "token": created_auth.token}
         except Exception as e:
-            print(f"INFLUX_SERVICE CRITICAL ERROR creating token for {bucket_name}: {e}")
+            logger.exception(f"INFLUX_SERVICE CRITICAL ERROR creating token for {bucket_name}")
             return {"status": "error", "error": str(e)}
 
     async def get_last_data_timestamp(self, bucket: str) -> Optional[datetime]:
@@ -117,7 +120,7 @@ class InfluxService:
         Prüft die letzten 24 Stunden für maximale Performance.
         """
         # DEBUG: logge den bucket-namen
-        print(f"DEBUG: Getting last data timestamp for bucket: '{bucket}'")
+        logger.debug(f"INFLUX_SERVICE: Getting last data timestamp for bucket: '{bucket}'")
 
         if bucket == "demo":
             # demo-Daten liegen in der Vergangenheit oder sind simuliert
@@ -150,12 +153,12 @@ class InfluxService:
                     if ts and ts.tzinfo is None:
                         import datetime
                         ts = ts.replace(tzinfo=datetime.timezone.utc)
-                    print(f"DEBUG: Found last timestamp for '{bucket}': {ts} (tz={ts.tzinfo if ts else 'N/A'})")
+                    logger.debug(f"INFLUX_SERVICE: Found last timestamp for '{bucket}': {ts}")
                     return ts
             
-            print(f"DEBUG: No data found for bucket '{bucket}' in the last 24h")
+            logger.debug(f"INFLUX_SERVICE: No data found for bucket '{bucket}' in the last 24h")
         except Exception as e:
-            print(f"DEBUG: Error getting last seen for bucket {bucket}: {e}")
+            logger.warning(f"INFLUX_SERVICE: Error getting last seen for bucket {bucket}: {e}")
             
         return None
 
@@ -271,7 +274,7 @@ class InfluxService:
                             source_table="multiple"
                         ))
             except Exception as e:
-                print(f"Primary entity discovery (tagValues) failed: {e}")
+                logger.debug(f"Primary entity discovery (tagValues) failed: {e}")
 
             # Strategie 2: Metadaten und Live-Werte Update für die gefundenen Entitäten (letzte 30 Tage)
             # Wir holen friendly_name_str, unit_of_measurement_str UND den eigentlichen Wert (value oder _value).
@@ -333,7 +336,7 @@ class InfluxService:
                                 ent.last_seen = m["_time"].isoformat()
 
             except Exception as e:
-                print(f"Metadata enrichment failed: {e}")
+                logger.debug(f"Metadata enrichment failed: {e}")
 
             # Fallback Strategie: Measurements (falls keine entity_id Tags vorhanden sind)
             if not entities:
@@ -361,7 +364,7 @@ class InfluxService:
             return entities
                 
         except Exception as e:
-            print(f"Error querying InfluxDB 2 for entities in bucket {bucket}: {e}")
+            logger.error(f"Error querying InfluxDB 2 for entities in bucket {bucket}: {e}")
             
         return self._get_demo_entities()
 
@@ -386,7 +389,7 @@ class InfluxService:
         def format_time(t, default_val="-24h"):
             import pytz
             from datetime import datetime, timedelta
-            print(f"DEBUG: Formatting time input: '{t}' (type={type(t)})")
+            logger.debug(f"INFLUX_SERVICE: Formatting time input: '{t}' (type={type(t)})")
             if not t: return default_val
             if isinstance(t, str):
                 if t == "now()": return "now()"
@@ -396,7 +399,7 @@ class InfluxService:
                     now_val = datetime.now(pytz.timezone("Europe/Berlin"))
                     today_start = now_val.replace(hour=0, minute=0, second=0, microsecond=0)
                     iso_start = today_start.isoformat()
-                    print(f"DEBUG: 'today' resolved to (Berlin): {iso_start}")
+                    logger.debug(f"INFLUX_SERVICE: 'today' resolved to (Berlin): {iso_start}")
                     return iso_start
                     
                 if t == "yesterday":
@@ -405,21 +408,21 @@ class InfluxService:
                     yesterday_end = yesterday_start.replace(hour=23, minute=59, second=59, microsecond=999999)
                     iso_start = yesterday_start.isoformat()
                     iso_end = yesterday_end.isoformat()
-                    print(f"DEBUG: 'yesterday' resolved to (Berlin): {iso_start} to {iso_end}")
+                    logger.debug(f"INFLUX_SERVICE: 'yesterday' resolved to (Berlin): {iso_start} to {iso_end}")
                     return f"{iso_start}|{iso_end}"
                 
                 if t == "this_week":
                     now_val = datetime.now(pytz.timezone("Europe/Berlin"))
                     monday_start = (now_val - timedelta(days=now_val.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
                     iso_start = monday_start.isoformat()
-                    print(f"DEBUG: 'this_week' resolved to (Berlin): {iso_start}")
+                    logger.debug(f"INFLUX_SERVICE: 'this_week' resolved to (Berlin): {iso_start}")
                     return iso_start
 
                 if t == "this_month":
                     now_val = datetime.now(pytz.timezone("Europe/Berlin"))
                     month_start = now_val.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                     iso_start = month_start.isoformat()
-                    print(f"DEBUG: 'this_month' resolved to (Berlin): {iso_start}")
+                    logger.debug(f"INFLUX_SERVICE: 'this_month' resolved to (Berlin): {iso_start}")
                     return iso_start
 
                 # If it's a simple relative duration like 24h, 12h etc
@@ -442,7 +445,7 @@ class InfluxService:
         if "|" in flux_start:
             flux_start, flux_end = flux_start.split("|")
 
-        print(f"DEBUG: Final flux range before fixing: {flux_start} to {flux_end}")
+        logger.debug(f"INFLUX_SERVICE: Final flux range before fixing: {flux_start} to {flux_end}")
 
         # Fix for absolute timestamps: they must not have a leading minus
         if flux_start and "T" in str(flux_start) and str(flux_start).startswith("-"):
@@ -456,7 +459,7 @@ class InfluxService:
         if flux_end and "T" in str(flux_end) and str(flux_end).startswith("-"):
             flux_end = str(flux_end)[1:]
 
-        print(f"DEBUG: Final flux range: {flux_start} to {flux_end}")
+        logger.debug(f"INFLUX_SERVICE: Final flux range: {flux_start} to {flux_end}")
 
         for eid in entity_ids:
             # WICHTIG: Wir holen value ODER state (für Select-Entitäten).
@@ -510,9 +513,9 @@ class InfluxService:
                             num_val = float(val) if isinstance(val, (int, float, bool)) else 0.0
                             state = str(val)
                             points.append(DataPoint(ts=fake_ts, value=num_val, state=state))
-                            print(f"DEBUG: Found last value BEFORE start for {eid}: {val}")
+                            logger.debug(f"INFLUX_SERVICE: Found last value BEFORE start for {eid}: {val}")
             except Exception as e:
-                print(f"DEBUG ERROR during last_query for {eid}: {e}")
+                logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
 
             # 2. Hauptabfrage für den Zeitraum
             flux_query = f'''
@@ -524,7 +527,7 @@ class InfluxService:
                 |> keep(columns: ["_time", "value", "state", "_measurement", "entity_id", "friendly_name_str", "domain", "unit_of_measurement_str"])
             '''
             
-            print(f"DEBUG: EXECUTING FLUX QUERY for {eid}:\n{flux_query}")
+            logger.debug(f"INFLUX_SERVICE: EXECUTING FLUX QUERY for {eid}:\n{flux_query}")
             
             try:
                 tables = query_api.query(query=flux_query)
@@ -567,7 +570,7 @@ class InfluxService:
                         
                         points.append(DataPoint(ts=ts, value=num_val, state=state))
             except Exception as e:
-                print(f"DEBUG ERROR for {eid}: {e}")
+                logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")
                 
             # 3. Carry Forward zum Endzeitpunkt (Last point to end of range)
             if points:
@@ -589,7 +592,7 @@ class InfluxService:
                 # Nur wenn der letzte Punkt zeitlich vor dem Ende liegt (ISO string compare)
                 if last_p.ts < final_end_ts:
                     points.append(DataPoint(ts=final_end_ts, value=last_p.value, state=last_p.state))
-                    print(f"DEBUG: Carrying forward last value for {eid} to absolute end: {final_end_ts}")
+                    logger.debug(f"INFLUX_SERVICE: Carrying forward last value for {eid} to absolute end: {final_end_ts}")
 
             # --- NEU: Double Padding am Anfang für Step-Lines (HA-Style) ---
             # Um schräge Linien vom Start zum ersten echten Punkt zu vermeiden, 
@@ -616,11 +619,11 @@ class InfluxService:
                         
                         # Einfügen zwischen 0 und 1
                         points.insert(1, DataPoint(ts=padding_ts, value=first_p.value, state=first_p.state))
-                        print(f"DEBUG: Added step-padding for {eid} at {padding_ts}")
+                        logger.debug(f"INFLUX_SERVICE: Added step-padding for {eid} at {padding_ts}")
                     except Exception as e:
-                        print(f"DEBUG: Could not add step-padding for {eid}: {e}")
+                        logger.debug(f"INFLUX_SERVICE: Could not add step-padding for {eid}: {e}")
 
-            print(f"DEBUG: Found {len(points)} points for {eid} (incl. padding)")
+            logger.debug(f"INFLUX_SERVICE: Found {len(points)} points for {eid} (incl. padding)")
             
             data_kind = self._get_data_kind(domain, eid)
             results.append(TimeSeriesResponse(
