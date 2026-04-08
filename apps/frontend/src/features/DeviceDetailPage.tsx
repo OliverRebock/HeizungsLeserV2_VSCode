@@ -428,6 +428,8 @@ const DeviceDetailPage: React.FC = () => {
             origin: 'start'
           },
           // Map values to rows: Aus = rowIdx - 1 (bottom of row), An = rowIdx (top of row)
+          // We use step: 'end', so the value of a point is drawn UNTIL the next point.
+          // To make it end at the last point, we don't add a final point in the backend.
           data: [...s.points]
             .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
             .map(p => [new Date(p.ts).getTime(), p.value ? rowIdx : rowIdx - 0.95])

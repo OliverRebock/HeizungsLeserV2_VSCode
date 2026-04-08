@@ -573,7 +573,11 @@ class InfluxService:
                 logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")
                 
             # 3. Carry Forward zum Endzeitpunkt (Last point to end of range)
-            if points:
+            # WICHTIG: Für binäre Entitäten KEIN künstliches Carry-Forward bis zum Range-Ende,
+            # um nicht fälschlicherweise einen Zustand zu suggerieren, der nicht bestätigt ist.
+            data_kind = self._get_data_kind(domain, eid)
+            
+            if points and data_kind != "binary" and data_kind != "enum":
                 # Sortieren um sicherzustellen, dass wir den wirklich letzten haben
                 points.sort(key=lambda p: p.ts)
                 last_p = points[-1]
