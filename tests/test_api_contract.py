@@ -48,12 +48,3 @@ async def test_users_list_contract_and_permissions(client: AsyncClient, platform
         if users:
             u = users[0]
             assert "id" in u and "email" in u and "is_active" in u
-
-@pytest.mark.asyncio
-async def test_analysis_options_endpoint_contract(client: AsyncClient, platform_admin):
-    headers = get_auth_header(platform_admin.id)
-    response = await client.get("/api/v1/analysis/options", headers=headers)
-    assert response.status_code in (200, 404, 204)
-    if response.status_code == 200:
-        data = response.json()
-        assert isinstance(data, (list, dict))

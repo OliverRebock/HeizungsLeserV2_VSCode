@@ -66,8 +66,14 @@ async def create_user(db: AsyncSession, *, user_in: UserCreate) -> User:
         )
     
     await db.commit()
-    await db.refresh(db_obj)
-    return db_obj
+    # Explicitly load relationships before returning to avoid lazy loading issues in async context
+    stmt = (
+        select(User)
+        .options(selectinload(User.tenant_links).selectinload(UserTenantLink.tenant))
+        .where(User.id == db_obj.id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one()
 
 async def update_user(db: AsyncSession, *, db_obj: User, user_in: UserUpdate) -> User:
     if user_in.password:
@@ -107,8 +113,14 @@ async def update_user(db: AsyncSession, *, db_obj: User, user_in: UserUpdate) ->
 
     db.add(db_obj)
     await db.commit()
-    await db.refresh(db_obj)
-    return db_obj
+    # Explicitly load relationships before returning to avoid lazy loading issues in async context
+    stmt = (
+        select(User)
+        .options(selectinload(User.tenant_links).selectinload(UserTenantLink.tenant))
+        .where(User.id == db_obj.id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one()
 
 async def delete_user(db: AsyncSession, user_id: int) -> bool:
     # First delete roles

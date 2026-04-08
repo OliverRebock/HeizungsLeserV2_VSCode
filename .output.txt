@@ -1,476 +1,841 @@
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../lib/api';
-import { type User, type Tenant } from '../types/api';
-import { useAuthStore } from '../hooks/useAuth';
-import {
-  Users,
-  UserPlus,
-  Edit2,
-  Trash2,
-  Key,
-  Search,
-  CheckCircle,
-  XCircle,
-  Loader2,
-  X
-} from 'lucide-react';
-const UserManagementPage: React.FC = () => {
-  const { user: currentUser } = useAuthStore();
-  const queryClient = useQueryClient();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedTenant, setSelectedTenant] = useState<string>('');
-
-  // Modal states
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-
-  // Form states
-  const [formData, setFormData] = useState({
-    email: '',
-    full_name: '',
-    password: '',
-    password_confirm: '',
-    role: 'tenant_user',
-    tenant_id: '',
-    is_active: true
-  });
-
-  const [resetPassword, setResetPassword] = useState('');
-  const isAdmin = currentUser?.is_superuser;
-  const { data: users, isLoading: isUsersLoading } = useQuery({
-    queryKey: ['users', selectedTenant],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (selectedTenant) params.append('tenant_id', selectedTenant);
-      const response = await api.get<User[]>(`/users/?${params.toString()}`);
-      return response.data;
-    },
-  });
-  const { data: tenants } = useQuery({
-    queryKey: ['tenants'],
-    queryFn: async () => {
-      if (!isAdmin) return [];
-      const response = await api.get<Tenant[]>('/tenants/');
-      return response.data;
-    },
-    enabled: !!isAdmin,
-  });
-  const createUserMutation = useMutation({
-    mutationFn: (newUser: any) => api.post('/users/', newUser),
-    onSuccess: () => {
-      console.log('User created successfully');
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-      setIsEditModalOpen(false);
-      resetForm();
-      alert('Benutzer erfolgreich angelegt');
-    },
-    onError: (error: any) => {
-      console.error('Error creating user:', error);
-      alert('Fehler beim Anlegen des Benutzers: ' + (error.response?.data?.detail || error.message));
-    }
-  });
-  const updateUserMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: any }) => api.put(`/users/${id}`, data),
-    onSuccess: () => {
-      console.log('User updated successfully');
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-      setIsEditModalOpen(false);
-      resetForm();
-      alert('Benutzer erfolgreich aktualisiert');
-    },
-    onError: (error: any) => {
-      console.error('Error updating user:', error);
-      alert('Fehler beim Aktualisieren des Benutzers: ' + (error.response?.data?.detail || error.message));
-    }
-  });
-  const deleteUserMutation = useMutation({
-    mutationFn: (id: number) => api.delete(`/users/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    },
-  });
-  const resetPasswordMutation = useMutation({
-    mutationFn: ({ id, password }: { id: number; password: string }) =>
-      api.post(`/users/${id}/reset-password`, { new_password: password }),
-    onSuccess: () => {
-      setIsResetModalOpen(false);
-      setResetPassword('');
-      alert('Passwort erfolgreich zurÃ¼ckgesetzt');
-    },
-  });
-  const resetForm = () => {
-    const defaultTenantId = isAdmin ? '' : (currentUser?.tenants?.[0]?.tenant_id?.toString() || '');
-    setFormData({
-      email: '',
-      full_name: '',
-      password: '',
-      password_confirm: '',
-      role: 'tenant_user',
-      tenant_id: defaultTenantId,
-      is_active: true
-    });
-    setEditingUser(null);
-  };
-  const handleEdit = (user: User) => {
-    setEditingUser(user);
-    const mainTenant = user.tenants[0];
-    setFormData({
-      email: user.email,
-      full_name: user.full_name || '',
-      password: '', // Empty means no change
-      password_confirm: '',
-      role: mainTenant?.role || 'tenant_user',
-      tenant_id: mainTenant?.tenant_id.toString() || '',
-      is_active: user.is_active ?? true
-    });
-    setIsEditModalOpen(true);
-  };
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (formData.password !== formData.password_confirm) {
-      alert('PasswÃ¶rter stimmen nicht Ã¼berein!');
-      return;
-    }
-    const payload = { ...formData, tenant_id: parseInt(formData.tenant_id) };
-    // Remove confirm password from payload
-    const { password_confirm, ...submitPayload } = payload;
-
-    if (editingUser) {
-      // Don't send empty password
-      const submitData: any = { ...submitPayload };
-      if (!submitData.password) delete submitData.password;
-      updateUserMutation.mutate({ id: editingUser.id, data: submitData });
-    } else {
-      createUserMutation.mutate(submitPayload);
-    }
-  };
-  const handleDelete = (id: number) => {
-    if (window.confirm('MÃ¶chten Sie diesen Benutzer wirklich lÃ¶schen?')) {
-      deleteUserMutation.mutate(id);
-    }
-  };
-  const filteredUsers = users?.filter(u => {
-    if (!isAdmin) {
-      // Rule: tenant_admin can only see tenant_users (or themselves)
-      const targetIsSelf = u.id === currentUser?.id;
-      const targetIsTenantUser = u.tenants.some(t => t.role === 'tenant_user');
-      if (!targetIsSelf && !targetIsTenantUser) return false;
-    }
-    return u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           (u.full_name && u.full_name.toLowerCase().includes(searchTerm.toLowerCase()));
-  });
-  const getRoleBadge = (role: string) => {
-    switch(role) {
-      case 'platform_admin': return <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-xs font-bold uppercase">Plattform Admin</span>;
-      case 'tenant_admin': return <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold uppercase">Mandanten Admin</span>;
-      default: return <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs font-bold uppercase">Benutzer</span>;
-    }
-  };
-  return (
-    <div className="space-y-6">
-      {/* Header & Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-lg text-white">
-            <Users className="w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Benutzerverwaltung</h1>
-            <p className="text-slate-500 text-sm">Verwalten Sie Benutzer, Rollen und Zugriffsrechte.</p>
-          </div>
-        </div>
-        <button
-          onClick={() => { resetForm(); setIsEditModalOpen(true); }}
-          className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold transition shadow-sm"
-        >
-          <UserPlus className="w-5 h-5" />
-          Benutzer anlegen
-        </button>
-      </div>
-      {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Nach Name oder E-Mail suchen..."
-            className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-        {isAdmin && (
-          <select
-            className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none min-w-[200px]"
-            value={selectedTenant}
-            onChange={(e) => setSelectedTenant(e.target.value)}
-          >
-            <option value="">Alle Mandanten</option>
-            {tenants?.map(t => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
-        )}
-      </div>
-      {/* Users Table */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        {isUsersLoading ? (
-          <div className="p-12 flex flex-col items-center justify-center text-slate-400">
-            <Loader2 className="w-8 h-8 animate-spin mb-2" />
-            <p>Benutzer werden geladen...</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider">
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Benutzer</th>
-                  <th className="px-6 py-4">Rolle / Mandant</th>
-                  <th className="px-6 py-4 text-right">Aktionen</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredUsers?.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-6 py-12 text-center text-slate-400">Keine Benutzer gefunden.</td>
-                  </tr>
-                ) : (
-                  filteredUsers?.map(u => {
-                    const isSelf = u.id === currentUser?.id;
-                    const targetIsTenantUser = u.tenants.some(t => t.role === 'tenant_user');
-                    const canEdit = isAdmin || (targetIsTenantUser && !isSelf); // self-edit usually via profile, but let's keep it consistent with backend
-                    const canReset = isAdmin || targetIsTenantUser;
-                    const canDelete = isAdmin || (targetIsTenantUser && !isSelf);
-                    return (
-                    <tr key={u.id} className="hover:bg-slate-50 transition">
-                      <td className="px-6 py-4">
-                        {u.is_active ? (
-                          <div className="flex items-center gap-1.5 text-emerald-600 font-medium text-sm">
-                            <CheckCircle className="w-4 h-4" /> Aktiv
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 text-slate-400 font-medium text-sm">
-                            <XCircle className="w-4 h-4" /> Inaktiv
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-slate-900">{u.full_name || 'Kein Name'}</div>
-                        <div className="text-sm text-slate-500">{u.email}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="space-y-1">
-                          {u.tenants.length > 0 ? u.tenants.map((t, idx) => (
-                            <div key={idx} className="flex flex-col gap-1">
-                              <div>{getRoleBadge(t.role)}</div>
-                              <div className="text-xs text-slate-500 font-medium">{t.tenant_name}</div>
-                            </div>
-                          )) : (
-                            u.is_superuser ? getRoleBadge('platform_admin') : <span className="text-xs text-slate-400 italic">Kein Mandant</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          {canEdit && (
-                            <button
-                              onClick={() => handleEdit(u)}
-                              className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                              title="Bearbeiten"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                          )}
-                          {canReset && (
-                            <button
-                              onClick={() => { setEditingUser(u); setIsResetModalOpen(true); }}
-                              className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition"
-                              title="Passwort zurÃ¼cksetzen"
-                            >
-                              <Key className="w-4 h-4" />
-                            </button>
-                          )}
-                          {canDelete && (
-                            <button
-                              onClick={() => handleDelete(u.id)}
-                              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                              title="LÃ¶schen"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      {/* Edit/Create Modal */}
-      {isEditModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-xl font-bold text-slate-900">
-                {editingUser ? 'Benutzer bearbeiten' : 'Neuen Benutzer anlegen'}
-              </h3>
-              <button onClick={() => setIsEditModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label className="block text-sm font-bold text-slate-700 mb-1">Anzeigename</label>
-                  <input
-                    type="text"
-                    required
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={formData.full_name}
-                    onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-bold text-slate-700 mb-1">E-Mail Adresse</label>
-                  <input
-                    type="email"
-                    required
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={formData.email}
-                    onChange={(e) => setFormData({...formData, email: e.target.value})}
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-bold text-slate-700 mb-1">
-                    {editingUser ? 'Neues Passwort (optional)' : 'Passwort'}
-                  </label>
-                  <input
-                    type="password"
-                    required={!editingUser}
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={formData.password}
-                    onChange={(e) => setFormData({...formData, password: e.target.value})}
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-bold text-slate-700 mb-1">
-                    Passwort bestÃ¤tigen
-                  </label>
-                  <input
-                    type="password"
-                    required={!editingUser || !!formData.password}
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    value={formData.password_confirm}
-                    onChange={(e) => setFormData({...formData, password_confirm: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-1">Rolle</label>
-                  <select
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none"
-                    value={formData.role}
-                    onChange={(e) => setFormData({...formData, role: e.target.value})}
-                  >
-                    <option value="tenant_user">Benutzer</option>
-                    {isAdmin && <option value="tenant_admin">Mandanten Admin</option>}
-                    {isAdmin && <option value="platform_admin">Plattform Admin</option>}
-                  </select>
-                </div>
-                {isAdmin && (
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-1">Mandant</label>
-                    <select
-                      required
-                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none"
-                      value={formData.tenant_id}
-                      onChange={(e) => setFormData({...formData, tenant_id: e.target.value})}
-                    >
-                      <option value="" disabled>AuswÃ¤hlen...</option>
-                      {tenants?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </div>
-                )}
-                <div className="col-span-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="w-4 h-4 text-blue-600 rounded"
-                      checked={formData.is_active}
-                      onChange={(e) => setFormData({...formData, is_active: e.target.checked})}
-                    />
-                    <span className="text-sm font-bold text-slate-700">Benutzer ist aktiv</span>
-                  </label>
-                </div>
-              </div>
-              <div className="pt-4 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIsEditModalOpen(false)}
-                  className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
-                >
-                  Abbrechen
-                </button>
-                <button
-                  type="submit"
-                  disabled={createUserMutation.isPending || updateUserMutation.isPending}
-                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition shadow-md flex items-center justify-center gap-2"
-                >
-                  {(createUserMutation.isPending || updateUserMutation.isPending) && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Speichern
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-      {/* Password Reset Modal */}
-      {isResetModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 animate-in fade-in zoom-in duration-200">
-            <div className="text-center space-y-2">
-              <div className="mx-auto w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4">
-                <Key className="w-6 h-6" />
-              </div>
-              <h3 className="text-xl font-bold text-slate-900">Passwort zurÃ¼cksetzen</h3>
-              <p className="text-sm text-slate-500">Geben Sie ein neues Passwort fÃ¼r <b>{editingUser?.email}</b> ein.</p>
-            </div>
-            <div className="space-y-4">
-              <input
-                type="password"
-                placeholder="Neues Passwort..."
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none"
-                value={resetPassword}
-                onChange={(e) => setResetPassword(e.target.value)}
-              />
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setIsResetModalOpen(false)}
-                  className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
-                >
-                  Abbrechen
-                </button>
-                <button
-                  onClick={() => resetPasswordMutation.mutate({ id: editingUser!.id, password: resetPassword })}
-                  disabled={!resetPassword || resetPasswordMutation.isPending}
-                  className="flex-1 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {resetPasswordMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-                  ZurÃ¼cksetzen
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-export default UserManagementPage;
+#1 [internal] load local bake definitions
+#1 reading from stdin 545B 0.0s done
+#1 DONE 0.0s
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 30B
+#2 transferring dockerfile: 538B 0.0s done
+#2 WARN: LegacyKeyValueFormat: "ENV key=value" should be used instead of legacy "ENV key value" format (line 5)
+#2 WARN: LegacyKeyValueFormat: "ENV key=value" should be used instead of legacy "ENV key value" format (line 6)
+#2 DONE 0.0s
+#3 [internal] load metadata for docker.io/library/python:3.12-slim
+#3 DONE 0.0s
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+#5 [internal] load build context
+#5 transferring context: 117.23kB 0.0s done
+#5 DONE 0.0s
+#6 [1/6] FROM docker.io/library/python:3.12-slim@sha256:3d5ed973e45820f5ba5e46bd065bd88b3a504ff0724d85980dcd05eab361fcf4
+#6 resolve docker.io/library/python:3.12-slim@sha256:3d5ed973e45820f5ba5e46bd065bd88b3a504ff0724d85980dcd05eab361fcf4 0.0s done
+#6 DONE 0.0s
+#7 [2/6] WORKDIR /app
+#7 CACHED
+#8 [3/6] RUN apt-get update && apt-get install -y     build-essential     libpq-dev     curl     && rm -rf /var/lib/apt/lists/*
+#8 0.445 Hit:1 http://deb.debian.org/debian trixie InRelease
+#8 0.450 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#8 0.461 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#8 0.482 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9671 kB]
+#8 0.896 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [5412 B]
+#8 0.896 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [119 kB]
+#8 1.553 Fetched 9886 kB in 1s (8188 kB/s)
+#8 1.553 Reading package lists...
+#8 2.207 Reading package lists...
+#8 2.841 Building dependency tree...
+#8 3.059 Reading state information...
+#8 3.376 The following additional packages will be installed:
+#8 3.376   bash-completion binutils binutils-common binutils-x86-64-linux-gnu bzip2 cpp
+#8 3.376   cpp-14 cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu dpkg-dev fakeroot g++
+#8 3.376   g++-14 g++-14-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-14
+#8 3.377   gcc-14-x86-64-linux-gnu gcc-x86-64-linux-gnu krb5-locales
+#8 3.377   libalgorithm-diff-perl libalgorithm-diff-xs-perl libalgorithm-merge-perl
+#8 3.377   libasan8 libatomic1 libbinutils libbrotli1 libc-dev-bin libc6-dev libcc1-0
+#8 3.377   libcom-err2 libcrypt-dev libctf-nobfd0 libctf0 libcurl4t64 libdpkg-perl
+#8 3.377   libfakeroot libfile-fcntllock-perl libgcc-14-dev libgdbm-compat4t64
+#8 3.377   libgnutls30t64 libgomp1 libgprofng0 libgssapi-krb5-2 libhwasan0 libidn2-0
+#8 3.377   libisl23 libitm1 libjansson4 libk5crypto3 libkeyutils1 libkrb5-3
+#8 3.377   libkrb5support0 libldap-common libldap2 liblocale-gettext-perl liblsan0
+#8 3.377   libmpc3 libmpfr6 libnghttp2-14 libnghttp3-9 libp11-kit0 libperl5.40 libpq5
+#8 3.378   libpsl5t64 libquadmath0 librtmp1 libsasl2-2 libsasl2-modules
+#8 3.378   libsasl2-modules-db libsframe1 libssh2-1t64 libssl-dev libssl3t64
+#8 3.379   libstdc++-14-dev libtasn1-6 libtsan2 libubsan1 libunistring5 linux-libc-dev
+#8 3.380   make manpages manpages-dev openssl openssl-provider-legacy patch perl
+#8 3.381   perl-modules-5.40 publicsuffix rpcsvc-proto sq xz-utils
+#8 3.385 Suggested packages:
+#8 3.385   binutils-doc gprofng-gui binutils-gold bzip2-doc cpp-doc gcc-14-locales
+#8 3.385   cpp-14-doc debian-keyring debian-tag2upload-keyring g++-multilib
+#8 3.385   g++-14-multilib gcc-14-doc gcc-multilib autoconf automake libtool flex bison
+#8 3.385   gdb gcc-doc gcc-14-multilib gdb-x86-64-linux-gnu libc-devtools glibc-doc
+#8 3.385   sensible-utils git bzr gnutls-bin krb5-doc krb5-user postgresql-doc-17
+#8 3.385   libsasl2-modules-gssapi-mit | libsasl2-modules-gssapi-heimdal
+#8 3.385   libsasl2-modules-ldap libsasl2-modules-otp libsasl2-modules-sql libssl-doc
+#8 3.385   libstdc++-14-doc make-doc man-browser ed diffutils-doc perl-doc
+#8 3.385   libterm-readline-gnu-perl | libterm-readline-perl-perl
+#8 3.385   libtap-harness-archive-perl
+#8 3.682 The following NEW packages will be installed:
+#8 3.682   bash-completion binutils binutils-common binutils-x86-64-linux-gnu
+#8 3.682   build-essential bzip2 cpp cpp-14 cpp-14-x86-64-linux-gnu
+#8 3.682   cpp-x86-64-linux-gnu curl dpkg-dev fakeroot g++ g++-14
+#8 3.682   g++-14-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-14
+#8 3.682   gcc-14-x86-64-linux-gnu gcc-x86-64-linux-gnu krb5-locales
+#8 3.682   libalgorithm-diff-perl libalgorithm-diff-xs-perl libalgorithm-merge-perl
+#8 3.682   libasan8 libatomic1 libbinutils libbrotli1 libc-dev-bin libc6-dev libcc1-0
+#8 3.683   libcom-err2 libcrypt-dev libctf-nobfd0 libctf0 libcurl4t64 libdpkg-perl
+#8 3.683   libfakeroot libfile-fcntllock-perl libgcc-14-dev libgdbm-compat4t64
+#8 3.684   libgnutls30t64 libgomp1 libgprofng0 libgssapi-krb5-2 libhwasan0 libidn2-0
+#8 3.684   libisl23 libitm1 libjansson4 libk5crypto3 libkeyutils1 libkrb5-3
+#8 3.684   libkrb5support0 libldap-common libldap2 liblocale-gettext-perl liblsan0
+#8 3.685   libmpc3 libmpfr6 libnghttp2-14 libnghttp3-9 libp11-kit0 libperl5.40
+#8 3.686   libpq-dev libpq5 libpsl5t64 libquadmath0 librtmp1 libsasl2-2
+#8 3.686   libsasl2-modules libsasl2-modules-db libsframe1 libssh2-1t64 libssl-dev
+#8 3.687   libstdc++-14-dev libtasn1-6 libtsan2 libubsan1 libunistring5 linux-libc-dev
+#8 3.688   make manpages manpages-dev patch perl perl-modules-5.40 publicsuffix
+#8 3.688   rpcsvc-proto sq xz-utils
+#8 3.691 The following packages will be upgraded:
+#8 3.692   libssl3t64 openssl openssl-provider-legacy
+#8 3.765 3 upgraded, 92 newly installed, 0 to remove and 0 not upgraded.
+#8 3.765 Need to get 105 MB of archives.
+#8 3.765 After this operation, 402 MB of additional disk space will be used.
+#8 3.765 Get:1 http://deb.debian.org/debian trixie/main amd64 liblocale-gettext-perl amd64 1.07-7+b1 [15.3 kB]
+#8 3.776 Get:2 http://deb.debian.org/debian-security trixie-security/main amd64 openssl-provider-legacy amd64 3.5.5-1~deb13u2 [311 kB]
+#8 3.806 Get:3 http://deb.debian.org/debian-security trixie-security/main amd64 libssl3t64 amd64 3.5.5-1~deb13u2 [2445 kB]
+#8 3.876 Get:4 http://deb.debian.org/debian trixie/main amd64 bash-completion all 1:2.16.0-7 [319 kB]
+#8 3.890 Get:5 http://deb.debian.org/debian trixie/main amd64 bzip2 amd64 1.0.8-6 [40.5 kB]
+#8 3.891 Get:6 http://deb.debian.org/debian trixie/main amd64 krb5-locales all 1.21.3-5 [101 kB]
+#8 3.896 Get:7 http://deb.debian.org/debian trixie/main amd64 manpages all 6.9.1-1 [1393 kB]
+#8 3.937 Get:8 http://deb.debian.org/debian trixie/main amd64 perl-modules-5.40 all 5.40.1-6 [3019 kB]
+#8 4.039 Get:9 http://deb.debian.org/debian trixie/main amd64 libgdbm-compat4t64 amd64 1.24-2 [50.3 kB]
+#8 4.044 Get:10 http://deb.debian.org/debian trixie/main amd64 libperl5.40 amd64 5.40.1-6 [4341 kB]
+#8 4.255 Get:11 http://deb.debian.org/debian trixie/main amd64 perl amd64 5.40.1-6 [267 kB]
+#8 4.271 Get:12 http://deb.debian.org/debian trixie/main amd64 xz-utils amd64 5.8.1-1 [660 kB]
+#8 4.309 Get:13 http://deb.debian.org/debian trixie/main amd64 libsframe1 amd64 2.44-3 [78.4 kB]
+#8 4.315 Get:14 http://deb.debian.org/debian trixie/main amd64 binutils-common amd64 2.44-3 [2509 kB]
+#8 4.459 Get:15 http://deb.debian.org/debian trixie/main amd64 libbinutils amd64 2.44-3 [534 kB]
+#8 4.487 Get:16 http://deb.debian.org/debian trixie/main amd64 libgprofng0 amd64 2.44-3 [808 kB]
+#8 4.534 Get:17 http://deb.debian.org/debian trixie/main amd64 libctf-nobfd0 amd64 2.44-3 [156 kB]
+#8 4.543 Get:18 http://deb.debian.org/debian trixie/main amd64 libctf0 amd64 2.44-3 [88.6 kB]
+#8 4.547 Get:19 http://deb.debian.org/debian trixie/main amd64 libjansson4 amd64 2.14-2+b3 [39.8 kB]
+#8 4.550 Get:20 http://deb.debian.org/debian trixie/main amd64 binutils-x86-64-linux-gnu amd64 2.44-3 [1014 kB]
+#8 4.602 Get:21 http://deb.debian.org/debian trixie/main amd64 binutils amd64 2.44-3 [265 kB]
+#8 4.620 Get:22 http://deb.debian.org/debian trixie/main amd64 libc-dev-bin amd64 2.41-12+deb13u2 [59.4 kB]
+#8 4.624 Get:23 http://deb.debian.org/debian-security trixie-security/main amd64 linux-libc-dev all 6.12.74-2 [2746 kB]
+#8 4.761 Get:24 http://deb.debian.org/debian trixie/main amd64 libcrypt-dev amd64 1:4.4.38-1 [119 kB]
+#8 4.767 Get:25 http://deb.debian.org/debian trixie/main amd64 rpcsvc-proto amd64 1.4.3-1 [63.3 kB]
+#8 4.770 Get:26 http://deb.debian.org/debian trixie/main amd64 libc6-dev amd64 2.41-12+deb13u2 [1996 kB]
+#8 4.866 Get:27 http://deb.debian.org/debian trixie/main amd64 libisl23 amd64 0.27-1 [659 kB]
+#8 4.901 Get:28 http://deb.debian.org/debian trixie/main amd64 libmpfr6 amd64 4.2.2-1 [729 kB]
+#8 4.934 Get:29 http://deb.debian.org/debian trixie/main amd64 libmpc3 amd64 1.3.1-1+b3 [52.2 kB]
+#8 4.946 Get:30 http://deb.debian.org/debian trixie/main amd64 cpp-14-x86-64-linux-gnu amd64 14.2.0-19 [11.0 MB]
+#8 5.549 Get:31 http://deb.debian.org/debian trixie/main amd64 cpp-14 amd64 14.2.0-19 [1280 B]
+#8 5.549 Get:32 http://deb.debian.org/debian trixie/main amd64 cpp-x86-64-linux-gnu amd64 4:14.2.0-1 [4840 B]
+#8 5.549 Get:33 http://deb.debian.org/debian trixie/main amd64 cpp amd64 4:14.2.0-1 [1568 B]
+#8 5.550 Get:34 http://deb.debian.org/debian trixie/main amd64 libcc1-0 amd64 14.2.0-19 [42.8 kB]
+#8 5.552 Get:35 http://deb.debian.org/debian trixie/main amd64 libgomp1 amd64 14.2.0-19 [137 kB]
+#8 5.558 Get:36 http://deb.debian.org/debian trixie/main amd64 libitm1 amd64 14.2.0-19 [26.0 kB]
+#8 5.559 Get:37 http://deb.debian.org/debian trixie/main amd64 libatomic1 amd64 14.2.0-19 [9308 B]
+#8 5.559 Get:38 http://deb.debian.org/debian trixie/main amd64 libasan8 amd64 14.2.0-19 [2725 kB]
+#8 5.693 Get:39 http://deb.debian.org/debian trixie/main amd64 liblsan0 amd64 14.2.0-19 [1204 kB]
+#8 5.743 Get:40 http://deb.debian.org/debian trixie/main amd64 libtsan2 amd64 14.2.0-19 [2460 kB]
+#8 5.863 Get:41 http://deb.debian.org/debian trixie/main amd64 libubsan1 amd64 14.2.0-19 [1074 kB]
+#8 5.908 Get:42 http://deb.debian.org/debian trixie/main amd64 libhwasan0 amd64 14.2.0-19 [1488 kB]
+#8 5.967 Get:43 http://deb.debian.org/debian trixie/main amd64 libquadmath0 amd64 14.2.0-19 [145 kB]
+#8 5.973 Get:44 http://deb.debian.org/debian trixie/main amd64 libgcc-14-dev amd64 14.2.0-19 [2672 kB]
+#8 6.081 Get:45 http://deb.debian.org/debian trixie/main amd64 gcc-14-x86-64-linux-gnu amd64 14.2.0-19 [21.4 MB]
+#8 6.917 Get:46 http://deb.debian.org/debian trixie/main amd64 gcc-14 amd64 14.2.0-19 [540 kB]
+#8 6.929 Get:47 http://deb.debian.org/debian trixie/main amd64 gcc-x86-64-linux-gnu amd64 4:14.2.0-1 [1436 B]
+#8 6.929 Get:48 http://deb.debian.org/debian trixie/main amd64 gcc amd64 4:14.2.0-1 [5136 B]
+#8 6.929 Get:49 http://deb.debian.org/debian trixie/main amd64 libstdc++-14-dev amd64 14.2.0-19 [2376 kB]
+#8 7.004 Get:50 http://deb.debian.org/debian trixie/main amd64 g++-14-x86-64-linux-gnu amd64 14.2.0-19 [12.1 MB]
+#8 7.371 Get:51 http://deb.debian.org/debian trixie/main amd64 g++-14 amd64 14.2.0-19 [22.5 kB]
+#8 7.373 Get:52 http://deb.debian.org/debian trixie/main amd64 g++-x86-64-linux-gnu amd64 4:14.2.0-1 [1200 B]
+#8 7.373 Get:53 http://deb.debian.org/debian trixie/main amd64 g++ amd64 4:14.2.0-1 [1344 B]
+#8 7.375 Get:54 http://deb.debian.org/debian trixie/main amd64 make amd64 4.4.1-2 [463 kB]
+#8 7.394 Get:55 http://deb.debian.org/debian trixie/main amd64 libdpkg-perl all 1.22.22 [651 kB]
+#8 7.419 Get:56 http://deb.debian.org/debian trixie/main amd64 patch amd64 2.8-2 [134 kB]
+#8 7.423 Get:57 http://deb.debian.org/debian trixie/main amd64 dpkg-dev all 1.22.22 [1337 kB]
+#8 7.460 Get:58 http://deb.debian.org/debian trixie/main amd64 build-essential amd64 12.12 [4624 B]
+#8 7.460 Get:59 http://deb.debian.org/debian trixie/main amd64 libbrotli1 amd64 1.1.0-2+b7 [307 kB]
+#8 7.469 Get:60 http://deb.debian.org/debian trixie/main amd64 libkrb5support0 amd64 1.21.3-5 [33.0 kB]
+#8 7.469 Get:61 http://deb.debian.org/debian trixie/main amd64 libcom-err2 amd64 1.47.2-3+b10 [25.0 kB]
+#8 7.471 Get:62 http://deb.debian.org/debian trixie/main amd64 libk5crypto3 amd64 1.21.3-5 [81.5 kB]
+#8 7.474 Get:63 http://deb.debian.org/debian trixie/main amd64 libkeyutils1 amd64 1.6.3-6 [9456 B]
+#8 7.475 Get:64 http://deb.debian.org/debian trixie/main amd64 libkrb5-3 amd64 1.21.3-5 [326 kB]
+#8 7.490 Get:65 http://deb.debian.org/debian trixie/main amd64 libgssapi-krb5-2 amd64 1.21.3-5 [138 kB]
+#8 7.494 Get:66 http://deb.debian.org/debian trixie/main amd64 libunistring5 amd64 1.3-2 [477 kB]
+#8 7.513 Get:67 http://deb.debian.org/debian trixie/main amd64 libidn2-0 amd64 2.3.8-2 [109 kB]
+#8 7.517 Get:68 http://deb.debian.org/debian trixie/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg1-9 [19.8 kB]
+#8 7.517 Get:69 http://deb.debian.org/debian trixie/main amd64 libsasl2-2 amd64 2.1.28+dfsg1-9 [57.5 kB]
+#8 7.519 Get:70 http://deb.debian.org/debian trixie/main amd64 libldap2 amd64 2.6.10+dfsg-1 [194 kB]
+#8 7.524 Get:71 http://deb.debian.org/debian trixie/main amd64 libnghttp2-14 amd64 1.64.0-1.1 [76.0 kB]
+#8 7.526 Get:72 http://deb.debian.org/debian trixie/main amd64 libnghttp3-9 amd64 1.8.0-1 [67.7 kB]
+#8 7.528 Get:73 http://deb.debian.org/debian trixie/main amd64 libpsl5t64 amd64 0.21.2-1.1+b1 [57.2 kB]
+#8 7.530 Get:74 http://deb.debian.org/debian trixie/main amd64 libp11-kit0 amd64 0.25.5-3 [425 kB]
+#8 7.539 Get:75 http://deb.debian.org/debian trixie/main amd64 libtasn1-6 amd64 4.20.0-2 [49.9 kB]
+#8 7.540 Get:76 http://deb.debian.org/debian trixie/main amd64 libgnutls30t64 amd64 3.8.9-3+deb13u2 [1468 kB]
+#8 7.581 Get:77 http://deb.debian.org/debian trixie/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b5 [58.8 kB]
+#8 7.583 Get:78 http://deb.debian.org/debian trixie/main amd64 libssh2-1t64 amd64 1.11.1-1 [245 kB]
+#8 7.593 Get:79 http://deb.debian.org/debian trixie/main amd64 libcurl4t64 amd64 8.14.1-2+deb13u2 [391 kB]
+#8 7.604 Get:80 http://deb.debian.org/debian trixie/main amd64 curl amd64 8.14.1-2+deb13u2 [270 kB]
+#8 7.610 Get:81 http://deb.debian.org/debian trixie/main amd64 libfakeroot amd64 1.37.1.1-1 [29.6 kB]
+#8 7.610 Get:82 http://deb.debian.org/debian trixie/main amd64 fakeroot amd64 1.37.1.1-1 [76.0 kB]
+#8 7.613 Get:83 http://deb.debian.org/debian trixie/main amd64 libalgorithm-diff-perl all 1.201-1 [43.3 kB]
+#8 7.615 Get:84 http://deb.debian.org/debian trixie/main amd64 libalgorithm-diff-xs-perl amd64 0.04-9 [11.1 kB]
+#8 7.615 Get:85 http://deb.debian.org/debian trixie/main amd64 libalgorithm-merge-perl all 0.08-5 [11.8 kB]
+#8 7.616 Get:86 http://deb.debian.org/debian trixie/main amd64 libfile-fcntllock-perl amd64 0.22-4+b4 [34.6 kB]
+#8 7.617 Get:87 http://deb.debian.org/debian trixie/main amd64 libldap-common all 2.6.10+dfsg-1 [35.1 kB]
+#8 7.619 Get:88 http://deb.debian.org/debian trixie/main amd64 libpq5 amd64 17.9-0+deb13u1 [228 kB]
+#8 7.626 Get:89 http://deb.debian.org/debian-security trixie-security/main amd64 libssl-dev amd64 3.5.5-1~deb13u2 [2954 kB]
+#8 7.725 Get:90 http://deb.debian.org/debian trixie/main amd64 libpq-dev amd64 17.9-0+deb13u1 [152 kB]
+#8 7.730 Get:91 http://deb.debian.org/debian trixie/main amd64 libsasl2-modules amd64 2.1.28+dfsg1-9 [66.7 kB]
+#8 7.732 Get:92 http://deb.debian.org/debian trixie/main amd64 manpages-dev all 6.9.1-1 [2122 kB]
+#8 7.795 Get:93 http://deb.debian.org/debian-security trixie-security/main amd64 openssl amd64 3.5.5-1~deb13u2 [1500 kB]
+#8 7.835 Get:94 http://deb.debian.org/debian trixie/main amd64 publicsuffix all 20250328.1952-0.1 [296 kB]
+#8 7.842 Get:95 http://deb.debian.org/debian trixie/main amd64 sq amd64 1.3.1-2+b2 [5653 kB]
+#8 8.234 debconf: unable to initialize frontend: Dialog
+#8 8.234 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#8 8.234 debconf: falling back to frontend: Readline
+#8 8.235 debconf: unable to initialize frontend: Readline
+#8 8.235 debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 95.)
+#8 8.235 debconf: falling back to frontend: Teletype
+#8 8.242 debconf: unable to initialize frontend: Teletype
+#8 8.242 debconf: (This frontend requires a controlling tty.)
+#8 8.242 debconf: falling back to frontend: Noninteractive
+#8 10.84 Fetched 105 MB in 4s (24.3 MB/s)
+#8 10.86 Selecting previously unselected package liblocale-gettext-perl.
+(Reading database ... 5645 files and directories currently installed.)
+#8 10.90 Preparing to unpack .../liblocale-gettext-perl_1.07-7+b1_amd64.deb ...
+#8 10.90 Unpacking liblocale-gettext-perl (1.07-7+b1) ...
+#8 10.94 Preparing to unpack .../openssl-provider-legacy_3.5.5-1~deb13u2_amd64.deb ...
+#8 10.96 Unpacking openssl-provider-legacy (3.5.5-1~deb13u2) over (3.5.5-1~deb13u1) ...
+#8 11.01 Setting up openssl-provider-legacy (3.5.5-1~deb13u2) ...
+(Reading database ... 5660 files and directories currently installed.)
+#8 11.06 Preparing to unpack .../libssl3t64_3.5.5-1~deb13u2_amd64.deb ...
+#8 11.08 Unpacking libssl3t64:amd64 (3.5.5-1~deb13u2) over (3.5.5-1~deb13u1) ...
+#8 11.24 Setting up libssl3t64:amd64 (3.5.5-1~deb13u2) ...
+#8 11.29 Selecting previously unselected package bash-completion.
+(Reading database ... 5660 files and directories currently installed.)
+#8 11.30 Preparing to unpack .../00-bash-completion_1%3a2.16.0-7_all.deb ...
+#8 11.30 Unpacking bash-completion (1:2.16.0-7) ...
+#8 11.44 Selecting previously unselected package bzip2.
+#8 11.45 Preparing to unpack .../01-bzip2_1.0.8-6_amd64.deb ...
+#8 11.45 Unpacking bzip2 (1.0.8-6) ...
+#8 11.49 Selecting previously unselected package krb5-locales.
+#8 11.49 Preparing to unpack .../02-krb5-locales_1.21.3-5_all.deb ...
+#8 11.50 Unpacking krb5-locales (1.21.3-5) ...
+#8 11.54 Selecting previously unselected package manpages.
+#8 11.54 Preparing to unpack .../03-manpages_6.9.1-1_all.deb ...
+#8 11.55 Unpacking manpages (6.9.1-1) ...
+#8 11.61 Selecting previously unselected package perl-modules-5.40.
+#8 11.61 Preparing to unpack .../04-perl-modules-5.40_5.40.1-6_all.deb ...
+#8 11.62 Unpacking perl-modules-5.40 (5.40.1-6) ...
+#8 11.91 Selecting previously unselected package libgdbm-compat4t64:amd64.
+#8 11.91 Preparing to unpack .../05-libgdbm-compat4t64_1.24-2_amd64.deb ...
+#8 11.92 Unpacking libgdbm-compat4t64:amd64 (1.24-2) ...
+#8 11.97 Selecting previously unselected package libperl5.40:amd64.
+#8 11.97 Preparing to unpack .../06-libperl5.40_5.40.1-6_amd64.deb ...
+#8 11.97 Unpacking libperl5.40:amd64 (5.40.1-6) ...
+#8 12.23 Selecting previously unselected package perl.
+#8 12.23 Preparing to unpack .../07-perl_5.40.1-6_amd64.deb ...
+#8 12.24 Unpacking perl (5.40.1-6) ...
+#8 12.29 Selecting previously unselected package xz-utils.
+#8 12.29 Preparing to unpack .../08-xz-utils_5.8.1-1_amd64.deb ...
+#8 12.30 Unpacking xz-utils (5.8.1-1) ...
+#8 12.35 Selecting previously unselected package libsframe1:amd64.
+#8 12.35 Preparing to unpack .../09-libsframe1_2.44-3_amd64.deb ...
+#8 12.36 Unpacking libsframe1:amd64 (2.44-3) ...
+#8 12.40 Selecting previously unselected package binutils-common:amd64.
+#8 12.40 Preparing to unpack .../10-binutils-common_2.44-3_amd64.deb ...
+#8 12.40 Unpacking binutils-common:amd64 (2.44-3) ...
+#8 12.55 Selecting previously unselected package libbinutils:amd64.
+#8 12.55 Preparing to unpack .../11-libbinutils_2.44-3_amd64.deb ...
+#8 12.55 Unpacking libbinutils:amd64 (2.44-3) ...
+#8 12.61 Selecting previously unselected package libgprofng0:amd64.
+#8 12.61 Preparing to unpack .../12-libgprofng0_2.44-3_amd64.deb ...
+#8 12.62 Unpacking libgprofng0:amd64 (2.44-3) ...
+#8 12.69 Selecting previously unselected package libctf-nobfd0:amd64.
+#8 12.69 Preparing to unpack .../13-libctf-nobfd0_2.44-3_amd64.deb ...
+#8 12.70 Unpacking libctf-nobfd0:amd64 (2.44-3) ...
+#8 12.75 Selecting previously unselected package libctf0:amd64.
+#8 12.75 Preparing to unpack .../14-libctf0_2.44-3_amd64.deb ...
+#8 12.76 Unpacking libctf0:amd64 (2.44-3) ...
+#8 12.80 Selecting previously unselected package libjansson4:amd64.
+#8 12.81 Preparing to unpack .../15-libjansson4_2.14-2+b3_amd64.deb ...
+#8 12.81 Unpacking libjansson4:amd64 (2.14-2+b3) ...
+#8 12.84 Selecting previously unselected package binutils-x86-64-linux-gnu.
+#8 12.85 Preparing to unpack .../16-binutils-x86-64-linux-gnu_2.44-3_amd64.deb ...
+#8 12.85 Unpacking binutils-x86-64-linux-gnu (2.44-3) ...
+#8 12.96 Selecting previously unselected package binutils.
+#8 12.96 Preparing to unpack .../17-binutils_2.44-3_amd64.deb ...
+#8 12.97 Unpacking binutils (2.44-3) ...
+#8 13.01 Selecting previously unselected package libc-dev-bin.
+#8 13.02 Preparing to unpack .../18-libc-dev-bin_2.41-12+deb13u2_amd64.deb ...
+#8 13.02 Unpacking libc-dev-bin (2.41-12+deb13u2) ...
+#8 13.06 Selecting previously unselected package linux-libc-dev.
+#8 13.06 Preparing to unpack .../19-linux-libc-dev_6.12.74-2_all.deb ...
+#8 13.07 Unpacking linux-libc-dev (6.12.74-2) ...
+#8 13.39 Selecting previously unselected package libcrypt-dev:amd64.
+#8 13.39 Preparing to unpack .../20-libcrypt-dev_1%3a4.4.38-1_amd64.deb ...
+#8 13.40 Unpacking libcrypt-dev:amd64 (1:4.4.38-1) ...
+#8 13.45 Selecting previously unselected package rpcsvc-proto.
+#8 13.45 Preparing to unpack .../21-rpcsvc-proto_1.4.3-1_amd64.deb ...
+#8 13.46 Unpacking rpcsvc-proto (1.4.3-1) ...
+#8 13.50 Selecting previously unselected package libc6-dev:amd64.
+#8 13.50 Preparing to unpack .../22-libc6-dev_2.41-12+deb13u2_amd64.deb ...
+#8 13.51 Unpacking libc6-dev:amd64 (2.41-12+deb13u2) ...
+#8 13.65 Selecting previously unselected package libisl23:amd64.
+#8 13.66 Preparing to unpack .../23-libisl23_0.27-1_amd64.deb ...
+#8 13.66 Unpacking libisl23:amd64 (0.27-1) ...
+#8 13.73 Selecting previously unselected package libmpfr6:amd64.
+#8 13.73 Preparing to unpack .../24-libmpfr6_4.2.2-1_amd64.deb ...
+#8 13.73 Unpacking libmpfr6:amd64 (4.2.2-1) ...
+#8 13.79 Selecting previously unselected package libmpc3:amd64.
+#8 13.79 Preparing to unpack .../25-libmpc3_1.3.1-1+b3_amd64.deb ...
+#8 13.79 Unpacking libmpc3:amd64 (1.3.1-1+b3) ...
+#8 13.83 Selecting previously unselected package cpp-14-x86-64-linux-gnu.
+#8 13.83 Preparing to unpack .../26-cpp-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+#8 13.83 Unpacking cpp-14-x86-64-linux-gnu (14.2.0-19) ...
+#8 14.30 Selecting previously unselected package cpp-14.
+#8 14.30 Preparing to unpack .../27-cpp-14_14.2.0-19_amd64.deb ...
+#8 14.30 Unpacking cpp-14 (14.2.0-19) ...
+#8 14.34 Selecting previously unselected package cpp-x86-64-linux-gnu.
+#8 14.34 Preparing to unpack .../28-cpp-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+#8 14.34 Unpacking cpp-x86-64-linux-gnu (4:14.2.0-1) ...
+#8 14.39 Selecting previously unselected package cpp.
+#8 14.39 Preparing to unpack .../29-cpp_4%3a14.2.0-1_amd64.deb ...
+#8 14.40 Unpacking cpp (4:14.2.0-1) ...
+#8 14.44 Selecting previously unselected package libcc1-0:amd64.
+#8 14.44 Preparing to unpack .../30-libcc1-0_14.2.0-19_amd64.deb ...
+#8 14.45 Unpacking libcc1-0:amd64 (14.2.0-19) ...
+#8 14.49 Selecting previously unselected package libgomp1:amd64.
+#8 14.49 Preparing to unpack .../31-libgomp1_14.2.0-19_amd64.deb ...
+#8 14.49 Unpacking libgomp1:amd64 (14.2.0-19) ...
+#8 14.54 Selecting previously unselected package libitm1:amd64.
+#8 14.54 Preparing to unpack .../32-libitm1_14.2.0-19_amd64.deb ...
+#8 14.54 Unpacking libitm1:amd64 (14.2.0-19) ...
+#8 14.58 Selecting previously unselected package libatomic1:amd64.
+#8 14.58 Preparing to unpack .../33-libatomic1_14.2.0-19_amd64.deb ...
+#8 14.59 Unpacking libatomic1:amd64 (14.2.0-19) ...
+#8 14.63 Selecting previously unselected package libasan8:amd64.
+#8 14.63 Preparing to unpack .../34-libasan8_14.2.0-19_amd64.deb ...
+#8 14.63 Unpacking libasan8:amd64 (14.2.0-19) ...
+#8 14.78 Selecting previously unselected package liblsan0:amd64.
+#8 14.78 Preparing to unpack .../35-liblsan0_14.2.0-19_amd64.deb ...
+#8 14.79 Unpacking liblsan0:amd64 (14.2.0-19) ...
+#8 14.88 Selecting previously unselected package libtsan2:amd64.
+#8 14.88 Preparing to unpack .../36-libtsan2_14.2.0-19_amd64.deb ...
+#8 14.88 Unpacking libtsan2:amd64 (14.2.0-19) ...
+#8 15.02 Selecting previously unselected package libubsan1:amd64.
+#8 15.02 Preparing to unpack .../37-libubsan1_14.2.0-19_amd64.deb ...
+#8 15.03 Unpacking libubsan1:amd64 (14.2.0-19) ...
+#8 15.11 Selecting previously unselected package libhwasan0:amd64.
+#8 15.11 Preparing to unpack .../38-libhwasan0_14.2.0-19_amd64.deb ...
+#8 15.12 Unpacking libhwasan0:amd64 (14.2.0-19) ...
+#8 15.21 Selecting previously unselected package libquadmath0:amd64.
+#8 15.22 Preparing to unpack .../39-libquadmath0_14.2.0-19_amd64.deb ...
+#8 15.22 Unpacking libquadmath0:amd64 (14.2.0-19) ...
+#8 15.26 Selecting previously unselected package libgcc-14-dev:amd64.
+#8 15.26 Preparing to unpack .../40-libgcc-14-dev_14.2.0-19_amd64.deb ...
+#8 15.27 Unpacking libgcc-14-dev:amd64 (14.2.0-19) ...
+#8 15.41 Selecting previously unselected package gcc-14-x86-64-linux-gnu.
+#8 15.41 Preparing to unpack .../41-gcc-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+#8 15.42 Unpacking gcc-14-x86-64-linux-gnu (14.2.0-19) ...
+#8 15.96 Selecting previously unselected package gcc-14.
+#8 15.96 Preparing to unpack .../42-gcc-14_14.2.0-19_amd64.deb ...
+#8 15.97 Unpacking gcc-14 (14.2.0-19) ...
+#8 16.01 Selecting previously unselected package gcc-x86-64-linux-gnu.
+#8 16.01 Preparing to unpack .../43-gcc-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+#8 16.02 Unpacking gcc-x86-64-linux-gnu (4:14.2.0-1) ...
+#8 16.06 Selecting previously unselected package gcc.
+#8 16.06 Preparing to unpack .../44-gcc_4%3a14.2.0-1_amd64.deb ...
+#8 16.07 Unpacking gcc (4:14.2.0-1) ...
+#8 16.10 Selecting previously unselected package libstdc++-14-dev:amd64.
+#8 16.10 Preparing to unpack .../45-libstdc++-14-dev_14.2.0-19_amd64.deb ...
+#8 16.11 Unpacking libstdc++-14-dev:amd64 (14.2.0-19) ...
+#8 16.29 Selecting previously unselected package g++-14-x86-64-linux-gnu.
+#8 16.30 Preparing to unpack .../46-g++-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+#8 16.30 Unpacking g++-14-x86-64-linux-gnu (14.2.0-19) ...
+#8 16.76 Selecting previously unselected package g++-14.
+#8 16.77 Preparing to unpack .../47-g++-14_14.2.0-19_amd64.deb ...
+#8 16.77 Unpacking g++-14 (14.2.0-19) ...
+#8 16.80 Selecting previously unselected package g++-x86-64-linux-gnu.
+#8 16.81 Preparing to unpack .../48-g++-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+#8 16.81 Unpacking g++-x86-64-linux-gnu (4:14.2.0-1) ...
+#8 16.85 Selecting previously unselected package g++.
+#8 16.85 Preparing to unpack .../49-g++_4%3a14.2.0-1_amd64.deb ...
+#8 16.86 Unpacking g++ (4:14.2.0-1) ...
+#8 16.89 Selecting previously unselected package make.
+#8 16.89 Preparing to unpack .../50-make_4.4.1-2_amd64.deb ...
+#8 16.89 Unpacking make (4.4.1-2) ...
+#8 16.94 Selecting previously unselected package libdpkg-perl.
+#8 16.94 Preparing to unpack .../51-libdpkg-perl_1.22.22_all.deb ...
+#8 16.95 Unpacking libdpkg-perl (1.22.22) ...
+#8 17.01 Selecting previously unselected package patch.
+#8 17.01 Preparing to unpack .../52-patch_2.8-2_amd64.deb ...
+#8 17.02 Unpacking patch (2.8-2) ...
+#8 17.06 Selecting previously unselected package dpkg-dev.
+#8 17.07 Preparing to unpack .../53-dpkg-dev_1.22.22_all.deb ...
+#8 17.07 Unpacking dpkg-dev (1.22.22) ...
+#8 17.14 Selecting previously unselected package build-essential.
+#8 17.14 Preparing to unpack .../54-build-essential_12.12_amd64.deb ...
+#8 17.15 Unpacking build-essential (12.12) ...
+#8 17.19 Selecting previously unselected package libbrotli1:amd64.
+#8 17.19 Preparing to unpack .../55-libbrotli1_1.1.0-2+b7_amd64.deb ...
+#8 17.20 Unpacking libbrotli1:amd64 (1.1.0-2+b7) ...
+#8 17.26 Selecting previously unselected package libkrb5support0:amd64.
+#8 17.26 Preparing to unpack .../56-libkrb5support0_1.21.3-5_amd64.deb ...
+#8 17.26 Unpacking libkrb5support0:amd64 (1.21.3-5) ...
+#8 17.32 Selecting previously unselected package libcom-err2:amd64.
+#8 17.32 Preparing to unpack .../57-libcom-err2_1.47.2-3+b10_amd64.deb ...
+#8 17.33 Unpacking libcom-err2:amd64 (1.47.2-3+b10) ...
+#8 17.38 Selecting previously unselected package libk5crypto3:amd64.
+#8 17.38 Preparing to unpack .../58-libk5crypto3_1.21.3-5_amd64.deb ...
+#8 17.39 Unpacking libk5crypto3:amd64 (1.21.3-5) ...
+#8 17.43 Selecting previously unselected package libkeyutils1:amd64.
+#8 17.44 Preparing to unpack .../59-libkeyutils1_1.6.3-6_amd64.deb ...
+#8 17.44 Unpacking libkeyutils1:amd64 (1.6.3-6) ...
+#8 17.48 Selecting previously unselected package libkrb5-3:amd64.
+#8 17.48 Preparing to unpack .../60-libkrb5-3_1.21.3-5_amd64.deb ...
+#8 17.49 Unpacking libkrb5-3:amd64 (1.21.3-5) ...
+#8 17.56 Selecting previously unselected package libgssapi-krb5-2:amd64.
+#8 17.56 Preparing to unpack .../61-libgssapi-krb5-2_1.21.3-5_amd64.deb ...
+#8 17.56 Unpacking libgssapi-krb5-2:amd64 (1.21.3-5) ...
+#8 17.61 Selecting previously unselected package libunistring5:amd64.
+#8 17.62 Preparing to unpack .../62-libunistring5_1.3-2_amd64.deb ...
+#8 17.62 Unpacking libunistring5:amd64 (1.3-2) ...
+#8 17.69 Selecting previously unselected package libidn2-0:amd64.
+#8 17.69 Preparing to unpack .../63-libidn2-0_2.3.8-2_amd64.deb ...
+#8 17.69 Unpacking libidn2-0:amd64 (2.3.8-2) ...
+#8 17.73 Selecting previously unselected package libsasl2-modules-db:amd64.
+#8 17.74 Preparing to unpack .../64-libsasl2-modules-db_2.1.28+dfsg1-9_amd64.deb ...
+#8 17.74 Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#8 17.78 Selecting previously unselected package libsasl2-2:amd64.
+#8 17.78 Preparing to unpack .../65-libsasl2-2_2.1.28+dfsg1-9_amd64.deb ...
+#8 17.79 Unpacking libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#8 17.83 Selecting previously unselected package libldap2:amd64.
+#8 17.83 Preparing to unpack .../66-libldap2_2.6.10+dfsg-1_amd64.deb ...
+#8 17.84 Unpacking libldap2:amd64 (2.6.10+dfsg-1) ...
+#8 17.88 Selecting previously unselected package libnghttp2-14:amd64.
+#8 17.88 Preparing to unpack .../67-libnghttp2-14_1.64.0-1.1_amd64.deb ...
+#8 17.89 Unpacking libnghttp2-14:amd64 (1.64.0-1.1) ...
+#8 17.93 Selecting previously unselected package libnghttp3-9:amd64.
+#8 17.93 Preparing to unpack .../68-libnghttp3-9_1.8.0-1_amd64.deb ...
+#8 17.94 Unpacking libnghttp3-9:amd64 (1.8.0-1) ...
+#8 17.98 Selecting previously unselected package libpsl5t64:amd64.
+#8 17.98 Preparing to unpack .../69-libpsl5t64_0.21.2-1.1+b1_amd64.deb ...
+#8 17.99 Unpacking libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#8 18.03 Selecting previously unselected package libp11-kit0:amd64.
+#8 18.03 Preparing to unpack .../70-libp11-kit0_0.25.5-3_amd64.deb ...
+#8 18.04 Unpacking libp11-kit0:amd64 (0.25.5-3) ...
+#8 18.10 Selecting previously unselected package libtasn1-6:amd64.
+#8 18.10 Preparing to unpack .../71-libtasn1-6_4.20.0-2_amd64.deb ...
+#8 18.11 Unpacking libtasn1-6:amd64 (4.20.0-2) ...
+#8 18.15 Selecting previously unselected package libgnutls30t64:amd64.
+#8 18.15 Preparing to unpack .../72-libgnutls30t64_3.8.9-3+deb13u2_amd64.deb ...
+#8 18.16 Unpacking libgnutls30t64:amd64 (3.8.9-3+deb13u2) ...
+#8 18.24 Selecting previously unselected package librtmp1:amd64.
+#8 18.24 Preparing to unpack .../73-librtmp1_2.4+20151223.gitfa8646d.1-2+b5_amd64.deb ...
+#8 18.25 Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#8 18.30 Selecting previously unselected package libssh2-1t64:amd64.
+#8 18.30 Preparing to unpack .../74-libssh2-1t64_1.11.1-1_amd64.deb ...
+#8 18.30 Unpacking libssh2-1t64:amd64 (1.11.1-1) ...
+#8 18.36 Selecting previously unselected package libcurl4t64:amd64.
+#8 18.36 Preparing to unpack .../75-libcurl4t64_8.14.1-2+deb13u2_amd64.deb ...
+#8 18.38 Unpacking libcurl4t64:amd64 (8.14.1-2+deb13u2) ...
+#8 18.43 Selecting previously unselected package curl.
+#8 18.43 Preparing to unpack .../76-curl_8.14.1-2+deb13u2_amd64.deb ...
+#8 18.44 Unpacking curl (8.14.1-2+deb13u2) ...
+#8 18.49 Selecting previously unselected package libfakeroot:amd64.
+#8 18.49 Preparing to unpack .../77-libfakeroot_1.37.1.1-1_amd64.deb ...
+#8 18.49 Unpacking libfakeroot:amd64 (1.37.1.1-1) ...
+#8 18.55 Selecting previously unselected package fakeroot.
+#8 18.55 Preparing to unpack .../78-fakeroot_1.37.1.1-1_amd64.deb ...
+#8 18.56 Unpacking fakeroot (1.37.1.1-1) ...
+#8 18.60 Selecting previously unselected package libalgorithm-diff-perl.
+#8 18.60 Preparing to unpack .../79-libalgorithm-diff-perl_1.201-1_all.deb ...
+#8 18.61 Unpacking libalgorithm-diff-perl (1.201-1) ...
+#8 18.65 Selecting previously unselected package libalgorithm-diff-xs-perl.
+#8 18.65 Preparing to unpack .../80-libalgorithm-diff-xs-perl_0.04-9_amd64.deb ...
+#8 18.66 Unpacking libalgorithm-diff-xs-perl (0.04-9) ...
+#8 18.69 Selecting previously unselected package libalgorithm-merge-perl.
+#8 18.69 Preparing to unpack .../81-libalgorithm-merge-perl_0.08-5_all.deb ...
+#8 18.70 Unpacking libalgorithm-merge-perl (0.08-5) ...
+#8 18.74 Selecting previously unselected package libfile-fcntllock-perl.
+#8 18.74 Preparing to unpack .../82-libfile-fcntllock-perl_0.22-4+b4_amd64.deb ...
+#8 18.75 Unpacking libfile-fcntllock-perl (0.22-4+b4) ...
+#8 18.79 Selecting previously unselected package libldap-common.
+#8 18.79 Preparing to unpack .../83-libldap-common_2.6.10+dfsg-1_all.deb ...
+#8 18.80 Unpacking libldap-common (2.6.10+dfsg-1) ...
+#8 18.86 Selecting previously unselected package libpq5:amd64.
+#8 18.86 Preparing to unpack .../84-libpq5_17.9-0+deb13u1_amd64.deb ...
+#8 18.86 Unpacking libpq5:amd64 (17.9-0+deb13u1) ...
+#8 18.91 Selecting previously unselected package libssl-dev:amd64.
+#8 18.91 Preparing to unpack .../85-libssl-dev_3.5.5-1~deb13u2_amd64.deb ...
+#8 18.92 Unpacking libssl-dev:amd64 (3.5.5-1~deb13u2) ...
+#8 19.12 Selecting previously unselected package libpq-dev.
+#8 19.12 Preparing to unpack .../86-libpq-dev_17.9-0+deb13u1_amd64.deb ...
+#8 19.13 Unpacking libpq-dev (17.9-0+deb13u1) ...
+#8 19.20 Selecting previously unselected package libsasl2-modules:amd64.
+#8 19.20 Preparing to unpack .../87-libsasl2-modules_2.1.28+dfsg1-9_amd64.deb ...
+#8 19.21 Unpacking libsasl2-modules:amd64 (2.1.28+dfsg1-9) ...
+#8 19.27 Selecting previously unselected package manpages-dev.
+#8 19.27 Preparing to unpack .../88-manpages-dev_6.9.1-1_all.deb ...
+#8 19.28 Unpacking manpages-dev (6.9.1-1) ...
+#8 19.40 Preparing to unpack .../89-openssl_3.5.5-1~deb13u2_amd64.deb ...
+#8 19.42 Unpacking openssl (3.5.5-1~deb13u2) over (3.5.5-1~deb13u1) ...
+#8 19.52 Selecting previously unselected package publicsuffix.
+#8 19.52 Preparing to unpack .../90-publicsuffix_20250328.1952-0.1_all.deb ...
+#8 19.52 Unpacking publicsuffix (20250328.1952-0.1) ...
+#8 19.59 Selecting previously unselected package sq.
+#8 19.59 Preparing to unpack .../91-sq_1.3.1-2+b2_amd64.deb ...
+#8 19.59 Unpacking sq (1.3.1-2+b2) ...
+#8 19.91 Setting up libkeyutils1:amd64 (1.6.3-6) ...
+#8 19.94 Setting up libgdbm-compat4t64:amd64 (1.24-2) ...
+#8 19.96 Setting up manpages (6.9.1-1) ...
+#8 19.98 Setting up libbrotli1:amd64 (1.1.0-2+b7) ...
+#8 19.99 Setting up libsasl2-modules:amd64 (2.1.28+dfsg1-9) ...
+#8 20.02 Setting up binutils-common:amd64 (2.44-3) ...
+#8 20.04 Setting up libnghttp2-14:amd64 (1.64.0-1.1) ...
+#8 20.05 Setting up linux-libc-dev (6.12.74-2) ...
+#8 20.07 Setting up libctf-nobfd0:amd64 (2.44-3) ...
+#8 20.08 Setting up krb5-locales (1.21.3-5) ...
+#8 20.10 Setting up libcom-err2:amd64 (1.47.2-3+b10) ...
+#8 20.11 Setting up sq (1.3.1-2+b2) ...
+#8 20.13 Setting up libgomp1:amd64 (14.2.0-19) ...
+#8 20.14 Setting up bzip2 (1.0.8-6) ...
+#8 20.15 Setting up libldap-common (2.6.10+dfsg-1) ...
+#8 20.17 Setting up libsframe1:amd64 (2.44-3) ...
+#8 20.19 Setting up libfakeroot:amd64 (1.37.1.1-1) ...
+#8 20.21 Setting up libjansson4:amd64 (2.14-2+b3) ...
+#8 20.23 Setting up libkrb5support0:amd64 (1.21.3-5) ...
+#8 20.24 Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#8 20.26 Setting up fakeroot (1.37.1.1-1) ...
+#8 20.28 update-alternatives: using /usr/bin/fakeroot-sysv to provide /usr/bin/fakeroot (fakeroot) in auto mode
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/man1/fakeroot.1.gz because associated file /usr/share/man/man1/fakeroot-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/man1/faked.1.gz because associated file /usr/share/man/man1/faked-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/es/man1/fakeroot.1.gz because associated file /usr/share/man/es/man1/fakeroot-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/es/man1/faked.1.gz because associated file /usr/share/man/es/man1/faked-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/fr/man1/fakeroot.1.gz because associated file /usr/share/man/fr/man1/fakeroot-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/fr/man1/faked.1.gz because associated file /usr/share/man/fr/man1/faked-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/sv/man1/fakeroot.1.gz because associated file /usr/share/man/sv/man1/fakeroot-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.28 update-alternatives: warning: skip creation of /usr/share/man/sv/man1/faked.1.gz because associated file /usr/share/man/sv/man1/faked-sysv.1.gz (of link group fakeroot) doesn't exist
+#8 20.29 Setting up rpcsvc-proto (1.4.3-1) ...
+#8 20.31 Setting up make (4.4.1-2) ...
+#8 20.32 Setting up libmpfr6:amd64 (4.2.2-1) ...
+#8 20.34 Setting up bash-completion (1:2.16.0-7) ...
+#8 20.37 Setting up xz-utils (5.8.1-1) ...
+#8 20.38 update-alternatives: using /usr/bin/xz to provide /usr/bin/lzma (lzma) in auto mode
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzma.1.gz because associated file /usr/share/man/man1/xz.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/unlzma.1.gz because associated file /usr/share/man/man1/unxz.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzcat.1.gz because associated file /usr/share/man/man1/xzcat.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzmore.1.gz because associated file /usr/share/man/man1/xzmore.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzless.1.gz because associated file /usr/share/man/man1/xzless.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzdiff.1.gz because associated file /usr/share/man/man1/xzdiff.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzcmp.1.gz because associated file /usr/share/man/man1/xzcmp.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzgrep.1.gz because associated file /usr/share/man/man1/xzgrep.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzegrep.1.gz because associated file /usr/share/man/man1/xzegrep.1.gz (of link group lzma) doesn't exist
+#8 20.38 update-alternatives: warning: skip creation of /usr/share/man/man1/lzfgrep.1.gz because associated file /usr/share/man/man1/xzfgrep.1.gz (of link group lzma) doesn't exist
+#8 20.39 Setting up libquadmath0:amd64 (14.2.0-19) ...
+#8 20.41 Setting up libp11-kit0:amd64 (0.25.5-3) ...
+#8 20.42 Setting up libunistring5:amd64 (1.3-2) ...
+#8 20.44 Setting up libssl-dev:amd64 (3.5.5-1~deb13u2) ...
+#8 20.46 Setting up libmpc3:amd64 (1.3.1-1+b3) ...
+#8 20.47 Setting up libatomic1:amd64 (14.2.0-19) ...
+#8 20.49 Setting up patch (2.8-2) ...
+#8 20.51 Setting up libk5crypto3:amd64 (1.21.3-5) ...
+#8 20.52 Setting up libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#8 20.54 Setting up libnghttp3-9:amd64 (1.8.0-1) ...
+#8 20.56 Setting up libubsan1:amd64 (14.2.0-19) ...
+#8 20.57 Setting up perl-modules-5.40 (5.40.1-6) ...
+#8 20.59 Setting up libhwasan0:amd64 (14.2.0-19) ...
+#8 20.60 Setting up libcrypt-dev:amd64 (1:4.4.38-1) ...
+#8 20.62 Setting up libasan8:amd64 (14.2.0-19) ...
+#8 20.64 Setting up libtasn1-6:amd64 (4.20.0-2) ...
+#8 20.65 Setting up libkrb5-3:amd64 (1.21.3-5) ...
+#8 20.67 Setting up libssh2-1t64:amd64 (1.11.1-1) ...
+#8 20.68 Setting up libtsan2:amd64 (14.2.0-19) ...
+#8 20.70 Setting up libbinutils:amd64 (2.44-3) ...
+#8 20.73 Setting up libisl23:amd64 (0.27-1) ...
+#8 20.74 Setting up libc-dev-bin (2.41-12+deb13u2) ...
+#8 20.75 Setting up openssl (3.5.5-1~deb13u2) ...
+#8 20.78 Setting up publicsuffix (20250328.1952-0.1) ...
+#8 20.79 Setting up libcc1-0:amd64 (14.2.0-19) ...
+#8 20.81 Setting up libldap2:amd64 (2.6.10+dfsg-1) ...
+#8 20.82 Setting up liblocale-gettext-perl (1.07-7+b1) ...
+#8 20.84 Setting up liblsan0:amd64 (14.2.0-19) ...
+#8 20.85 Setting up libitm1:amd64 (14.2.0-19) ...
+#8 20.87 Setting up libctf0:amd64 (2.44-3) ...
+#8 20.89 Setting up manpages-dev (6.9.1-1) ...
+#8 20.90 Setting up libidn2-0:amd64 (2.3.8-2) ...
+#8 20.92 Setting up libperl5.40:amd64 (5.40.1-6) ...
+#8 20.93 Setting up perl (5.40.1-6) ...
+#8 20.95 Setting up libgprofng0:amd64 (2.44-3) ...
+#8 20.97 Setting up libgssapi-krb5-2:amd64 (1.21.3-5) ...
+#8 20.98 Setting up cpp-14-x86-64-linux-gnu (14.2.0-19) ...
+#8 21.00 Setting up libdpkg-perl (1.22.22) ...
+#8 21.01 Setting up cpp-14 (14.2.0-19) ...
+#8 21.02 Setting up libc6-dev:amd64 (2.41-12+deb13u2) ...
+#8 21.04 Setting up libgcc-14-dev:amd64 (14.2.0-19) ...
+#8 21.05 Setting up libstdc++-14-dev:amd64 (14.2.0-19) ...
+#8 21.06 Setting up binutils-x86-64-linux-gnu (2.44-3) ...
+#8 21.08 Setting up cpp-x86-64-linux-gnu (4:14.2.0-1) ...
+#8 21.09 Setting up libgnutls30t64:amd64 (3.8.9-3+deb13u2) ...
+#8 21.10 Setting up libfile-fcntllock-perl (0.22-4+b4) ...
+#8 21.11 Setting up libalgorithm-diff-perl (1.201-1) ...
+#8 21.12 Setting up libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#8 21.14 Setting up libpq5:amd64 (17.9-0+deb13u1) ...
+#8 21.15 Setting up libpq-dev (17.9-0+deb13u1) ...
+#8 21.16 Setting up binutils (2.44-3) ...
+#8 21.18 Setting up dpkg-dev (1.22.22) ...
+#8 21.20 Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#8 21.21 Setting up cpp (4:14.2.0-1) ...
+#8 21.24 Setting up gcc-14-x86-64-linux-gnu (14.2.0-19) ...
+#8 21.26 Setting up libalgorithm-diff-xs-perl (0.04-9) ...
+#8 21.28 Setting up libalgorithm-merge-perl (0.08-5) ...
+#8 21.29 Setting up gcc-x86-64-linux-gnu (4:14.2.0-1) ...
+#8 21.30 Setting up libcurl4t64:amd64 (8.14.1-2+deb13u2) ...
+#8 21.31 Setting up gcc-14 (14.2.0-19) ...
+#8 21.33 Setting up g++-14-x86-64-linux-gnu (14.2.0-19) ...
+#8 21.34 Setting up g++-x86-64-linux-gnu (4:14.2.0-1) ...
+#8 21.36 Setting up curl (8.14.1-2+deb13u2) ...
+#8 21.37 Setting up g++-14 (14.2.0-19) ...
+#8 21.38 Setting up gcc (4:14.2.0-1) ...
+#8 21.42 Setting up g++ (4:14.2.0-1) ...
+#8 21.43 update-alternatives: using /usr/bin/g++ to provide /usr/bin/c++ (c++) in auto mode
+#8 21.44 Setting up build-essential (12.12) ...
+#8 21.46 Processing triggers for libc-bin (2.41-12+deb13u2) ...
+#8 DONE 21.8s
+#9 [4/6] COPY requirements.txt .
+#9 DONE 0.1s
+#10 [5/6] RUN pip install --no-cache-dir -r requirements.txt
+#10 1.828 Collecting fastapi==0.115.11 (from fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 1.920   Downloading fastapi-0.115.11-py3-none-any.whl.metadata (27 kB)
+#10 2.141 Collecting sqlalchemy==2.0.38 (from sqlalchemy[asyncio]==2.0.38->-r requirements.txt (line 2))
+#10 2.160   Downloading SQLAlchemy-2.0.38-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (9.6 kB)
+#10 2.190 Collecting alembic==1.14.1 (from -r requirements.txt (line 3))
+#10 2.204   Downloading alembic-1.14.1-py3-none-any.whl.metadata (7.4 kB)
+#10 2.279 Collecting pydantic==2.10.6 (from pydantic[email]==2.10.6->-r requirements.txt (line 4))
+#10 2.296   Downloading pydantic-2.10.6-py3-none-any.whl.metadata (30 kB)
+#10 2.316 Collecting pydantic-settings==2.8.1 (from -r requirements.txt (line 5))
+#10 2.330   Downloading pydantic_settings-2.8.1-py3-none-any.whl.metadata (3.5 kB)
+#10 2.349 Collecting psycopg==3.2.5 (from psycopg[binary]==3.2.5->-r requirements.txt (line 6))
+#10 2.363   Downloading psycopg-3.2.5-py3-none-any.whl.metadata (4.4 kB)
+#10 2.401 Collecting asyncpg==0.30.0 (from -r requirements.txt (line 7))
+#10 2.416   Downloading asyncpg-0.30.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (5.0 kB)
+#10 2.435 Collecting python-jose==3.4.0 (from python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 2.449   Downloading python_jose-3.4.0-py2.py3-none-any.whl.metadata (5.5 kB)
+#10 2.466 Collecting passlib==1.7.4 (from passlib[bcrypt]==1.7.4->-r requirements.txt (line 9))
+#10 2.479   Downloading passlib-1.7.4-py2.py3-none-any.whl.metadata (1.7 kB)
+#10 2.516 Collecting bcrypt==4.0.1 (from -r requirements.txt (line 10))
+#10 2.529   Downloading bcrypt-4.0.1-cp36-abi3-manylinux_2_28_x86_64.whl.metadata (9.0 kB)
+#10 2.551 Collecting influxdb-client>=1.48.0 (from -r requirements.txt (line 11))
+#10 2.568   Downloading influxdb_client-1.50.0-py3-none-any.whl.metadata (65 kB)
+#10 2.599 Collecting python-multipart==0.0.20 (from -r requirements.txt (line 12))
+#10 2.612   Downloading python_multipart-0.0.20-py3-none-any.whl.metadata (1.8 kB)
+#10 2.637 Collecting uvicorn==0.34.0 (from uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 2.650   Downloading uvicorn-0.34.0-py3-none-any.whl.metadata (6.5 kB)
+#10 2.669 Collecting python-dotenv==1.0.1 (from -r requirements.txt (line 14))
+#10 2.684   Downloading python_dotenv-1.0.1-py3-none-any.whl.metadata (23 kB)
+#10 2.731 Collecting openai==1.61.1 (from -r requirements.txt (line 15))
+#10 2.749   Downloading openai-1.61.1-py3-none-any.whl.metadata (27 kB)
+#10 2.882 Collecting numpy==2.2.3 (from -r requirements.txt (line 16))
+#10 2.896   Downloading numpy-2.2.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (62 kB)
+#10 2.944 Collecting pytz==2024.1 (from -r requirements.txt (line 18))
+#10 2.957   Downloading pytz-2024.1-py2.py3-none-any.whl.metadata (22 kB)
+#10 3.031 Collecting starlette<0.47.0,>=0.40.0 (from fastapi==0.115.11->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 3.043   Downloading starlette-0.46.2-py3-none-any.whl.metadata (6.2 kB)
+#10 3.072 Collecting typing-extensions>=4.8.0 (from fastapi==0.115.11->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 3.084   Downloading typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+#10 3.166 Collecting greenlet!=0.4.17 (from sqlalchemy==2.0.38->sqlalchemy[asyncio]==2.0.38->-r requirements.txt (line 2))
+#10 3.179   Downloading greenlet-3.3.2-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (3.7 kB)
+#10 3.209 Collecting Mako (from alembic==1.14.1->-r requirements.txt (line 3))
+#10 3.222   Downloading mako-1.3.10-py3-none-any.whl.metadata (2.9 kB)
+#10 3.241 Collecting annotated-types>=0.6.0 (from pydantic==2.10.6->pydantic[email]==2.10.6->-r requirements.txt (line 4))
+#10 3.254   Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
+#10 3.735 Collecting pydantic-core==2.27.2 (from pydantic==2.10.6->pydantic[email]==2.10.6->-r requirements.txt (line 4))
+#10 3.753   Downloading pydantic_core-2.27.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+#10 3.783 Collecting ecdsa!=0.15 (from python-jose==3.4.0->python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 3.796   Downloading ecdsa-0.19.2-py2.py3-none-any.whl.metadata (29 kB)
+#10 3.819 Collecting rsa!=4.1.1,!=4.4,<5.0,>=4.0 (from python-jose==3.4.0->python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 3.831   Downloading rsa-4.9.1-py3-none-any.whl.metadata (5.6 kB)
+#10 3.858 Collecting pyasn1<0.5.0,>=0.4.1 (from python-jose==3.4.0->python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 3.874   Downloading pyasn1-0.4.8-py2.py3-none-any.whl.metadata (1.5 kB)
+#10 3.898 Collecting click>=7.0 (from uvicorn==0.34.0->uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 3.912   Downloading click-8.3.2-py3-none-any.whl.metadata (2.6 kB)
+#10 3.928 Collecting h11>=0.8 (from uvicorn==0.34.0->uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 3.940   Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+#10 3.964 Collecting anyio<5,>=3.5.0 (from openai==1.61.1->-r requirements.txt (line 15))
+#10 3.978   Downloading anyio-4.13.0-py3-none-any.whl.metadata (4.5 kB)
+#10 3.995 Collecting distro<2,>=1.7.0 (from openai==1.61.1->-r requirements.txt (line 15))
+#10 4.008   Downloading distro-1.9.0-py3-none-any.whl.metadata (6.8 kB)
+#10 4.030 Collecting httpx<1,>=0.23.0 (from openai==1.61.1->-r requirements.txt (line 15))
+#10 4.043   Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+#10 4.103 Collecting jiter<1,>=0.4.0 (from openai==1.61.1->-r requirements.txt (line 15))
+#10 4.115   Downloading jiter-0.13.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (5.2 kB)
+#10 4.138 Collecting sniffio (from openai==1.61.1->-r requirements.txt (line 15))
+#10 4.149   Downloading sniffio-1.3.1-py3-none-any.whl.metadata (3.9 kB)
+#10 4.180 Collecting tqdm>4 (from openai==1.61.1->-r requirements.txt (line 15))
+#10 4.193   Downloading tqdm-4.67.3-py3-none-any.whl.metadata (57 kB)
+#10 4.222 Collecting fastapi-cli>=0.0.5 (from fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 4.238   Downloading fastapi_cli-0.0.24-py3-none-any.whl.metadata (6.4 kB)
+#10 4.262 Collecting jinja2>=3.1.5 (from fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 4.274   Downloading jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+#10 4.296 Collecting email-validator>=2.0.0 (from fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 4.309   Downloading email_validator-2.3.0-py3-none-any.whl.metadata (26 kB)
+#10 4.422 Collecting psycopg-binary==3.2.5 (from psycopg[binary]==3.2.5->-r requirements.txt (line 6))
+#10 4.438   Downloading psycopg_binary-3.2.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (2.8 kB)
+#10 4.562 Collecting cryptography>=3.4.0 (from python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 4.574   Downloading cryptography-46.0.7-cp311-abi3-manylinux_2_34_x86_64.whl.metadata (5.7 kB)
+#10 4.612 Collecting httptools>=0.6.3 (from uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 4.625   Downloading httptools-0.7.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (3.5 kB)
+#10 4.660 Collecting pyyaml>=5.1 (from uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 4.674   Downloading pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+#10 4.712 Collecting uvloop!=0.15.0,!=0.15.1,>=0.14.0 (from uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 4.725   Downloading uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (4.9 kB)
+#10 4.848 Collecting watchfiles>=0.13 (from uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 4.861   Downloading watchfiles-1.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.9 kB)
+#10 4.926 Collecting websockets>=10.4 (from uvicorn[standard]==0.34.0->-r requirements.txt (line 13))
+#10 4.938   Downloading websockets-16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
+#10 4.965 Collecting reactivex>=4.0.4 (from influxdb-client>=1.48.0->-r requirements.txt (line 11))
+#10 4.979   Downloading reactivex-4.1.0-py3-none-any.whl.metadata (5.7 kB)
+#10 5.000 Collecting certifi>=14.05.14 (from influxdb-client>=1.48.0->-r requirements.txt (line 11))
+#10 5.013   Downloading certifi-2026.2.25-py3-none-any.whl.metadata (2.5 kB)
+#10 5.030 Collecting python-dateutil>=2.5.3 (from influxdb-client>=1.48.0->-r requirements.txt (line 11))
+#10 5.042   Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+#10 5.076 Collecting urllib3>=1.26.0 (from influxdb-client>=1.48.0->-r requirements.txt (line 11))
+#10 5.089   Downloading urllib3-2.6.3-py3-none-any.whl.metadata (6.9 kB)
+#10 5.111 Collecting idna>=2.8 (from anyio<5,>=3.5.0->openai==1.61.1->-r requirements.txt (line 15))
+#10 5.123   Downloading idna-3.11-py3-none-any.whl.metadata (8.4 kB)
+#10 5.200 Collecting cffi>=2.0.0 (from cryptography>=3.4.0->python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 5.213   Downloading cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.6 kB)
+#10 5.232 Collecting six>=1.9.0 (from ecdsa!=0.15->python-jose==3.4.0->python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 5.244   Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+#10 5.268 Collecting dnspython>=2.0.0 (from email-validator>=2.0.0->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.281   Downloading dnspython-2.8.0-py3-none-any.whl.metadata (5.7 kB)
+#10 5.309 Collecting typer>=0.16.0 (from fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.322   Downloading typer-0.24.1-py3-none-any.whl.metadata (16 kB)
+#10 5.347 Collecting rich-toolkit>=0.14.8 (from fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.361   Downloading rich_toolkit-0.19.7-py3-none-any.whl.metadata (1.0 kB)
+#10 5.387 Collecting fastapi-cloud-cli>=0.1.1 (from fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.401   Downloading fastapi_cloud_cli-0.16.1-py3-none-any.whl.metadata (3.3 kB)
+#10 5.442 Collecting httpcore==1.* (from httpx<1,>=0.23.0->openai==1.61.1->-r requirements.txt (line 15))
+#10 5.458   Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+#10 5.516 Collecting MarkupSafe>=2.0 (from jinja2>=3.1.5->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.528   Downloading markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.7 kB)
+#10 5.591 Collecting pycparser (from cffi>=2.0.0->cryptography>=3.4.0->python-jose[cryptography]==3.4.0->-r requirements.txt (line 8))
+#10 5.604   Downloading pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+#10 5.685 Collecting rignore>=0.5.1 (from fastapi-cloud-cli>=0.1.1->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.701   Downloading rignore-0.7.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.2 kB)
+#10 5.754 Collecting sentry-sdk>=2.20.0 (from fastapi-cloud-cli>=0.1.1->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.766   Downloading sentry_sdk-2.57.0-py2.py3-none-any.whl.metadata (10 kB)
+#10 5.832 Collecting fastar>=0.10.0 (from fastapi-cloud-cli>=0.1.1->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.845   Downloading fastar-0.10.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.0 kB)
+#10 5.886 Collecting rich>=13.7.1 (from rich-toolkit>=0.14.8->fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.899   Downloading rich-14.3.3-py3-none-any.whl.metadata (18 kB)
+#10 5.924 Collecting shellingham>=1.3.0 (from typer>=0.16.0->fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.938   Downloading shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
+#10 5.964 Collecting annotated-doc>=0.0.2 (from typer>=0.16.0->fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 5.977   Downloading annotated_doc-0.0.4-py3-none-any.whl.metadata (6.6 kB)
+#10 6.000 Collecting markdown-it-py>=2.2.0 (from rich>=13.7.1->rich-toolkit>=0.14.8->fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 6.013   Downloading markdown_it_py-4.0.0-py3-none-any.whl.metadata (7.3 kB)
+#10 6.037 Collecting pygments<3.0.0,>=2.13.0 (from rich>=13.7.1->rich-toolkit>=0.14.8->fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 6.050   Downloading pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
+#10 6.084 Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=13.7.1->rich-toolkit>=0.14.8->fastapi-cli>=0.0.5->fastapi-cli[standard]>=0.0.5; extra == "standard"->fastapi[standard]==0.115.11->-r requirements.txt (line 1))
+#10 6.098   Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+#10 6.121 Downloading fastapi-0.115.11-py3-none-any.whl (94 kB)
+#10 6.143 Downloading SQLAlchemy-2.0.38-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.3 MB)
+#10 6.279    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 24.9 MB/s eta 0:00:00
+#10 6.293 Downloading alembic-1.14.1-py3-none-any.whl (233 kB)
+#10 6.321 Downloading pydantic-2.10.6-py3-none-any.whl (431 kB)
+#10 6.347 Downloading pydantic_settings-2.8.1-py3-none-any.whl (30 kB)
+#10 6.363 Downloading psycopg-3.2.5-py3-none-any.whl (198 kB)
+#10 6.389 Downloading asyncpg-0.30.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.6 MB)
+#10 6.552    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.6/3.6 MB 22.9 MB/s eta 0:00:00
+#10 6.567 Downloading python_jose-3.4.0-py2.py3-none-any.whl (34 kB)
+#10 6.581 Downloading passlib-1.7.4-py2.py3-none-any.whl (525 kB)
+#10 6.598    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 525.6/525.6 kB 47.5 MB/s eta 0:00:00
+#10 6.610 Downloading bcrypt-4.0.1-cp36-abi3-manylinux_2_28_x86_64.whl (593 kB)
+#10 6.636    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 593.7/593.7 kB 23.9 MB/s eta 0:00:00
+#10 6.649 Downloading python_multipart-0.0.20-py3-none-any.whl (24 kB)
+#10 6.663 Downloading uvicorn-0.34.0-py3-none-any.whl (62 kB)
+#10 6.680 Downloading python_dotenv-1.0.1-py3-none-any.whl (19 kB)
+#10 6.695 Downloading openai-1.61.1-py3-none-any.whl (463 kB)
+#10 6.727 Downloading numpy-2.2.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (16.1 MB)
+#10 7.433    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.1/16.1 MB 23.0 MB/s eta 0:00:00
+#10 7.446 Downloading pytz-2024.1-py2.py3-none-any.whl (505 kB)
+#10 7.482 Downloading psycopg_binary-3.2.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (4.3 MB)
+#10 7.663    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.3/4.3 MB 23.6 MB/s eta 0:00:00
+#10 7.677 Downloading pydantic_core-2.27.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.0 MB)
+#10 7.755    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.0/2.0 MB 26.0 MB/s eta 0:00:00
+#10 7.773 Downloading influxdb_client-1.50.0-py3-none-any.whl (746 kB)
+#10 7.804    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 746.3/746.3 kB 28.7 MB/s eta 0:00:00
+#10 7.817 Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
+#10 7.831 Downloading anyio-4.13.0-py3-none-any.whl (114 kB)
+#10 7.851 Downloading certifi-2026.2.25-py3-none-any.whl (153 kB)
+#10 7.873 Downloading click-8.3.2-py3-none-any.whl (108 kB)
+#10 7.891 Downloading cryptography-46.0.7-cp311-abi3-manylinux_2_34_x86_64.whl (4.5 MB)
+#10 8.075    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.5/4.5 MB 24.7 MB/s eta 0:00:00
+#10 8.089 Downloading distro-1.9.0-py3-none-any.whl (20 kB)
+#10 8.104 Downloading ecdsa-0.19.2-py2.py3-none-any.whl (150 kB)
+#10 8.127 Downloading email_validator-2.3.0-py3-none-any.whl (35 kB)
+#10 8.141 Downloading fastapi_cli-0.0.24-py3-none-any.whl (12 kB)
+#10 8.156 Downloading greenlet-3.3.2-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (613 kB)
+#10 8.184    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 613.9/613.9 kB 21.4 MB/s eta 0:00:00
+#10 8.197 Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#10 8.212 Downloading httptools-0.7.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (517 kB)
+#10 8.245 Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+#10 8.259 Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+#10 8.277 Downloading jinja2-3.1.6-py3-none-any.whl (134 kB)
+#10 8.296 Downloading jiter-0.13.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (360 kB)
+#10 8.325 Downloading pyasn1-0.4.8-py2.py3-none-any.whl (77 kB)
+#10 8.346 Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+#10 8.369 Downloading pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (807 kB)
+#10 8.401    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 807.9/807.9 kB 25.5 MB/s eta 0:00:00
+#10 8.416 Downloading reactivex-4.1.0-py3-none-any.whl (218 kB)
+#10 8.438 Downloading rsa-4.9.1-py3-none-any.whl (34 kB)
+#10 8.454 Downloading starlette-0.46.2-py3-none-any.whl (72 kB)
+#10 8.471 Downloading tqdm-4.67.3-py3-none-any.whl (78 kB)
+#10 8.488 Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+#10 8.504 Downloading urllib3-2.6.3-py3-none-any.whl (131 kB)
+#10 8.523 Downloading uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (4.4 MB)
+#10 8.731    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.4/4.4 MB 21.2 MB/s eta 0:00:00
+#10 8.743 Downloading watchfiles-1.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
+#10 8.772 Downloading websockets-16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (184 kB)
+#10 8.794 Downloading mako-1.3.10-py3-none-any.whl (78 kB)
+#10 8.809 Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
+#10 8.824 Downloading cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (219 kB)
+#10 8.843 Downloading dnspython-2.8.0-py3-none-any.whl (331 kB)
+#10 8.875 Downloading fastapi_cloud_cli-0.16.1-py3-none-any.whl (33 kB)
+#10 8.888 Downloading idna-3.11-py3-none-any.whl (71 kB)
+#10 8.905 Downloading markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
+#10 8.921 Downloading rich_toolkit-0.19.7-py3-none-any.whl (32 kB)
+#10 8.937 Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+#10 8.951 Downloading typer-0.24.1-py3-none-any.whl (56 kB)
+#10 8.966 Downloading annotated_doc-0.0.4-py3-none-any.whl (5.3 kB)
+#10 8.981 Downloading fastar-0.10.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (819 kB)
+#10 9.014    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 819.3/819.3 kB 23.5 MB/s eta 0:00:00
+#10 9.026 Downloading rich-14.3.3-py3-none-any.whl (310 kB)
+#10 9.053 Downloading rignore-0.7.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (959 kB)
+#10 9.091    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 959.8/959.8 kB 31.3 MB/s eta 0:00:00
+#10 9.104 Downloading sentry_sdk-2.57.0-py2.py3-none-any.whl (456 kB)
+#10 9.136 Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+#10 9.148 Downloading pycparser-3.0-py3-none-any.whl (48 kB)
+#10 9.162 Downloading markdown_it_py-4.0.0-py3-none-any.whl (87 kB)
+#10 9.180 Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
+#10 9.223    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 33.4 MB/s eta 0:00:00
+#10 9.237 Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+#10 9.454 Installing collected packages: pytz, pyasn1, passlib, websockets, uvloop, urllib3, typing-extensions, tqdm, sniffio, six, shellingham, rsa, rignore, pyyaml, python-multipart, python-dotenv, pygments, pycparser, psycopg-binary, numpy, mdurl, MarkupSafe, jiter, idna, httptools, h11, greenlet, fastar, dnspython, distro, click, certifi, bcrypt, asyncpg, annotated-types, annotated-doc, uvicorn, sqlalchemy, sentry-sdk, reactivex, python-dateutil, pydantic-core, psycopg, markdown-it-py, Mako, jinja2, httpcore, email-validator, ecdsa, cffi, anyio, watchfiles, starlette, rich, python-jose, pydantic, influxdb-client, httpx, cryptography, alembic, typer, rich-toolkit, pydantic-settings, openai, fastapi, fastapi-cloud-cli, fastapi-cli
+#10 18.13 Successfully installed Mako-1.3.10 MarkupSafe-3.0.3 alembic-1.14.1 annotated-doc-0.0.4 annotated-types-0.7.0 anyio-4.13.0 asyncpg-0.30.0 bcrypt-4.0.1 certifi-2026.2.25 cffi-2.0.0 click-8.3.2 cryptography-46.0.7 distro-1.9.0 dnspython-2.8.0 ecdsa-0.19.2 email-validator-2.3.0 fastapi-0.115.11 fastapi-cli-0.0.24 fastapi-cloud-cli-0.16.1 fastar-0.10.0 greenlet-3.3.2 h11-0.16.0 httpcore-1.0.9 httptools-0.7.1 httpx-0.28.1 idna-3.11 influxdb-client-1.50.0 jinja2-3.1.6 jiter-0.13.0 markdown-it-py-4.0.0 mdurl-0.1.2 numpy-2.2.3 openai-1.61.1 passlib-1.7.4 psycopg-3.2.5 psycopg-binary-3.2.5 pyasn1-0.4.8 pycparser-3.0 pydantic-2.10.6 pydantic-core-2.27.2 pydantic-settings-2.8.1 pygments-2.20.0 python-dateutil-2.9.0.post0 python-dotenv-1.0.1 python-jose-3.4.0 python-multipart-0.0.20 pytz-2024.1 pyyaml-6.0.3 reactivex-4.1.0 rich-14.3.3 rich-toolkit-0.19.7 rignore-0.7.6 rsa-4.9.1 sentry-sdk-2.57.0 shellingham-1.5.4 six-1.17.0 sniffio-1.3.1 sqlalchemy-2.0.38 starlette-0.46.2 tqdm-4.67.3 typer-0.24.1 typing-extensions-4.15.0 urllib3-2.6.3 uvicorn-0.34.0 uvloop-0.22.1 watchfiles-1.1.1 websockets-16.0
+#10 18.13 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#10 18.23
+#10 18.23 [notice] A new release of pip is available: 25.0.1 -> 26.0.1
+#10 18.23 [notice] To update, run: pip install --upgrade pip
+#10 DONE 18.7s
+#11 [6/6] COPY . .
+#11 DONE 0.1s
+#12 exporting to image
+#12 exporting layers
+#12 exporting layers 12.2s done
+#12 exporting manifest sha256:20267ee045426794e6f4ae0c5602b4c0864d1001ee7e817139ed95d4465a6265 0.0s done
+#12 exporting config sha256:0a1f0612ccf5461b79c6bc4249d2e5d21666ff33bdb0963e41431d7194bb96b2 0.0s done
+#12 exporting attestation manifest sha256:eb87ae4582b34d146d8fadde556cdca81be31dc6c265a537fd074921d285e3fa 0.0s done
+#12 exporting manifest list sha256:08acefd3a98fbe06aa542b74efbbd07049c035fd5c3c10c338f57d465e019f3c 0.0s done
+#12 naming to docker.io/library/infra-backend:latest done
+#12 unpacking to docker.io/library/infra-backend:latest
+#12 unpacking to docker.io/library/infra-backend:latest 5.0s done
+#12 DONE 17.4s
+#13 resolving provenance for metadata file
+#13 DONE 0.0s
+[+] build 1/1
+ ✔ Image infra-backend Built                                                58.8s
+[+] up 2/2
+ ✔ Container heizungsleser-v2-postgres Healthy                               3.3s
+ ✔ Container heizungsleser-v2-backend  Started                               3.7s
