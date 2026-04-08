@@ -741,7 +741,8 @@ class InfluxService:
                 logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")
                 
             # 3. Carry Forward zum Endzeitpunkt (Last point to end of range)
-            # Auf Benutzerwunsch: Letzten Wert bis zum rechten Rand (Uhrzeit jetzt) weiterzeichnen.
+            # Auf Benutzerwunsch: Zeilinie IMMER bis zum rechten Rand (Uhrzeit jetzt) weiterziehen.
+            # Fachregel: Leistungswerte (instant) fallen auf 0, wenn der letzte Punkt > 15 Min alt ist.
             value_semantics = self._get_value_semantics(eid, unit_of_measurement)
             if points:
                 # Sortieren um sicherzustellen, dass wir den wirklich letzten haben
@@ -750,17 +751,35 @@ class InfluxService:
                 
                 # Wir bestimmen den absoluten Endzeitpunkt für das Carry-Forward
                 import pytz
-                from datetime import datetime as dt_final
+                from datetime import datetime as dt_final, timedelta as dt_timedelta
                 tz_berlin = pytz.timezone("Europe/Berlin")
                 
+                now_berlin = dt_final.now(tz_berlin)
                 final_end_ts = end_rfc
                 if "T" not in str(final_end_ts):
-                    final_end_ts = dt_final.now(tz_berlin).isoformat()
+                    final_end_ts = now_berlin.isoformat()
                 
                 # Nur wenn der letzte Punkt zeitlich vor dem Ende liegt (ISO string compare)
                 if last_p.ts < final_end_ts:
-                    points.append(DataPoint(ts=final_end_ts, value=last_p.value, state=last_p.state))
-                    logger.debug(f"INFLUX_SERVICE: Carrying forward last value for {eid} to absolute end: {final_end_ts}")
+                    carry_value = last_p.value
+                    carry_state = last_p.state
+                    
+                    # Logik für momentane Werte (Leistung etc.)
+                    if value_semantics == "instant":
+                        try:
+                            # Prüfen wie alt der letzte Punkt ist
+                            ts_to_parse = last_p.ts.replace('Z', '+00:00')
+                            dt_last = datetime.fromisoformat(ts_to_parse)
+                            # Wenn der letzte Punkt älter als 15 Minuten ist, fallen wir am Rand auf 0
+                            if (now_berlin - dt_last).total_seconds() > 900: # 15 * 60
+                                carry_value = 0.0
+                                carry_state = "0.0 (Timeout)"
+                                logger.debug(f"INFLUX_SERVICE: Instant value {eid} timed out (>15m), falling to 0 at end.")
+                        except Exception as e:
+                            logger.error(f"INFLUX_SERVICE: Error calculating timeout for {eid}: {e}")
+
+                    points.append(DataPoint(ts=final_end_ts, value=carry_value, state=carry_state))
+                    logger.debug(f"INFLUX_SERVICE: Carrying forward {eid} to absolute end: {final_end_ts} (Value: {carry_value})")
 
             # --- NEU: Double Padding am Anfang für Step-Lines (HA-Style) ---
             # Um schräge Linien vom Start zum ersten echten Punkt zu vermeiden, 
