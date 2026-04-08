@@ -5,10 +5,37 @@ from app.api import deps
 from app.db.session import get_db
 from app.services import device as device_service
 from app.services.influx import influx_service
-from app.schemas.influx import Entity, DeviceDataResponse, TimeSeriesResponse
+from app.schemas.influx import Entity, DeviceDataResponse, TimeSeriesResponse, DeviceDashboardResponse
 from app.models.user import User
 
 router = APIRouter()
+
+@router.get("/{device_id}/dashboard", response_model=DeviceDashboardResponse)
+async def read_device_dashboard(
+    device_id: int,
+    entity_ids: List[str] = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Get specialized dashboard data (latest actual points + sparklines)."""
+    db_device = await device_service.get_device(db, device_id=device_id)
+    if not db_device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    await deps.check_tenant_access(db_device.tenant_id, current_user, db)
+    
+    clean_ids = []
+    for eid in entity_ids:
+        if "," in eid:
+            clean_ids.extend([id.strip() for id in eid.split(",") if id.strip()])
+        else:
+            clean_ids.append(eid.strip())
+            
+    entities = await influx_service.get_dashboard_data(db_device, clean_ids)
+    
+    return DeviceDashboardResponse(
+        device_id=device_id,
+        entities=entities
+    )
 
 @router.get("/{device_id}/entities", response_model=List[Entity])
 async def read_device_entities(

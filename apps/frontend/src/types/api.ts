@@ -86,6 +86,29 @@ export interface DeviceDataResponse {
   series: TimeSeries[];
 }
 
+export interface DashboardDataPoint {
+  ts: string;
+  value?: number;
+  state?: string;
+  is_actual: boolean;
+}
+
+export interface DashboardEntityData {
+  entity_id: string;
+  friendly_name: string;
+  domain: string;
+  data_kind: string;
+  latest_point?: DashboardDataPoint;
+  sparkline: DashboardDataPoint[];
+  is_stale: boolean;
+  freshness_info: string;
+}
+
+export interface DeviceDashboardResponse {
+  device_id: number;
+  entities: DashboardEntityData[];
+}
+
 export interface LoginResponse {
   access_token: string;
   token_type: string;

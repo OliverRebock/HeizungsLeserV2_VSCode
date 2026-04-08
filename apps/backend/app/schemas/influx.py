@@ -14,8 +14,28 @@ class EntityBase(BaseModel):
 
 class Entity(EntityBase):
     last_seen: Optional[str] = None
-    last_value: Optional[Union[float, str]] = None # Neu hinzugefügt
+    last_value: Optional[Union[float, str]] = None
     source_table: str
+
+class DashboardDataPoint(BaseModel):
+    ts: str
+    value: Optional[float] = None
+    state: Optional[str] = None
+    is_actual: bool = True # False if it's a padding/synthetic point
+
+class DashboardEntityData(BaseModel):
+    entity_id: str
+    friendly_name: str
+    domain: str
+    data_kind: str
+    latest_point: Optional[DashboardDataPoint] = None
+    sparkline: List[DashboardDataPoint] = []
+    is_stale: bool = False
+    freshness_info: str = ""
+
+class DeviceDashboardResponse(BaseModel):
+    device_id: int
+    entities: List[DashboardEntityData]
 
 class DataPoint(BaseModel):
     ts: str

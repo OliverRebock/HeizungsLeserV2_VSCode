@@ -48,3 +48,33 @@ async def test_users_list_contract_and_permissions(client: AsyncClient, platform
         if users:
             u = users[0]
             assert "id" in u and "email" in u and "is_active" in u
+
+@pytest.mark.asyncio
+async def test_dashboard_endpoint_contract(client: AsyncClient, platform_admin, test_tenant):
+    headers = get_auth_header(platform_admin.id)
+    # Create a device
+    device_data = {
+        "display_name": "Dashboard Test Device",
+        "influx_database_name": "db_dashboard_test",
+        "tenant_id": test_tenant.id,
+        "is_active": True,
+        "source_type": "influxdb_v2"
+    }
+    res = await client.post("/api/v1/devices/", json=device_data, headers=headers)
+    assert res.status_code == 200
+    device = res.json()
+    device_id = device["id"]
+
+    # Dashboard endpoint (with dummy entity id)
+    dashboard_res = await client.get(
+        f"/api/v1/data/{device_id}/dashboard", 
+        params={"entity_ids": "sensor.test_temp"},
+        headers=headers
+    )
+    assert dashboard_res.status_code == 200
+    data = dashboard_res.json()
+    
+    assert data["device_id"] == device_id
+    assert isinstance(data["entities"], list)
+    # The InfluxDB connection might fail in test env (no docker), but the endpoint should return a list.
+    # We skip detailed entity checks if InfluxDB is not reachable.

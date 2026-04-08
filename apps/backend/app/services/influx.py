@@ -371,6 +371,143 @@ class InfluxService:
     def _get_demo_entities(self) -> List[Entity]:
         return []
 
+    async def get_dashboard_data(
+        self,
+        device: Device,
+        entity_ids: List[str]
+    ) -> List[DashboardEntityData]:
+        """
+        Fetch specialized dashboard data: 
+        - the very last REAL point (no carry forward, no padding)
+        - a small sparkline (last 24h, no artificial start/end points)
+        - freshness check
+        """
+        import pytz
+        from datetime import datetime, timedelta
+        
+        bucket = device.influx_database_name or settings.INFLUXDB_BUCKET
+        query_api = self.client.query_api()
+        tz_berlin = pytz.timezone("Europe/Berlin")
+        now_berlin = datetime.now(tz_berlin)
+        
+        results = []
+        
+        for eid in entity_ids:
+            # 1. Get the last 10 points for sparkline + latest info
+            # We query last 24h by default for the sparkline
+            query = f'''
+                from(bucket: "{bucket}")
+                |> range(start: -24h)
+                |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state" or r["_field"] == "friendly_name_str")
+                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+                |> sort(columns: ["_time"], desc: false)
+                |> keep(columns: ["_time", "value", "state", "friendly_name_str"])
+            '''
+            
+            try:
+                tables = query_api.query(query=query)
+                all_points = []
+                friendly_name = eid
+                
+                for table in tables:
+                    for record in table.records:
+                        ts = record.get_time().isoformat()
+                        val = record.values.get("value")
+                        if val is None: val = record.values.get("state")
+                        
+                        if record.values.get("friendly_name_str"):
+                            friendly_name = self._clean_friendly_name(record.values.get("friendly_name_str"))
+                            
+                        num_val = 0.0
+                        state = str(val) if val is not None else ""
+                        if isinstance(val, (int, float)):
+                            num_val = float(val)
+                        elif isinstance(val, bool):
+                            num_val = 1.0 if val else 0.0
+                            state = "on" if val else "off"
+                        elif isinstance(val, str):
+                            state = val
+                            low_val = val.lower()
+                            if low_val in ['on', 'true', 'active', 'heating', 'an']: num_val = 1.0
+                            elif low_val in ['off', 'false', 'idle', 'inactive', 'aus']: num_val = 0.0
+                        
+                        all_points.append(DashboardDataPoint(
+                            ts=ts, 
+                            value=num_val, 
+                            state=state, 
+                            is_actual=True
+                        ))
+                
+                # If no data in 24h, try to get at least the absolute last point ever
+                latest_point = None
+                if all_points:
+                    latest_point = all_points[-1]
+                else:
+                    last_query = f'''
+                        from(bucket: "{bucket}")
+                        |> range(start: 0)
+                        |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                        |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
+                        |> last()
+                        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+                    '''
+                    last_tables = query_api.query(query=last_query)
+                    for table in last_tables:
+                        for record in table.records:
+                            ts = record.get_time().isoformat()
+                            val = record.values.get("value")
+                            if val is None: val = record.values.get("state")
+                            num_val = 0.0
+                            state = str(val) if val is not None else ""
+                            if isinstance(val, (int, float)): num_val = float(val)
+                            elif isinstance(val, bool): num_val = 1.0 if val else 0.0
+                            elif isinstance(val, str): 
+                                state = val
+                                low_val = val.lower()
+                                if low_val in ['on', 'true', 'active', 'heating', 'an']: num_val = 1.0
+                                elif low_val in ['off', 'false', 'idle', 'inactive', 'aus']: num_val = 0.0
+                            
+                            latest_point = DashboardDataPoint(ts=ts, value=num_val, state=state, is_actual=True)
+
+                # Freshness check
+                is_stale = True
+                freshness_info = "Keine Daten"
+                if latest_point:
+                    lp_dt = datetime.fromisoformat(latest_point.ts.replace('Z', '+00:00'))
+                    diff = datetime.now(pytz.utc) - lp_dt
+                    
+                    if diff < timedelta(minutes=30):
+                        is_stale = False
+                        freshness_info = "Aktuell"
+                    elif diff < timedelta(hours=2):
+                        is_stale = False
+                        freshness_info = f"Vor {int(diff.total_seconds() // 60)} Min"
+                    else:
+                        is_stale = True
+                        if diff < timedelta(days=1):
+                            freshness_info = f"Vor {int(diff.total_seconds() // 3600)} Std"
+                        else:
+                            freshness_info = f"Vor {int(diff.days)} Tagen"
+
+                data_kind = self._get_data_kind(eid.split('.')[0] if '.' in eid else "sensor", eid)
+                
+                results.append(DashboardEntityData(
+                    entity_id=eid,
+                    friendly_name=friendly_name,
+                    domain=eid.split('.')[0] if '.' in eid else "sensor",
+                    data_kind=data_kind,
+                    latest_point=latest_point,
+                    sparkline=all_points[-20:] if len(all_points) > 20 else all_points,
+                    is_stale=is_stale,
+                    freshness_info=freshness_info
+                ))
+
+            except Exception as e:
+                logger.error(f"Error fetching dashboard data for {eid}: {e}")
+                
+        return results
+
     async def get_timeseries(
         self, 
         device: Device, 
