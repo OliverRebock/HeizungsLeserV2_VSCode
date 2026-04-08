@@ -6,6 +6,7 @@ class EntityBase(BaseModel):
     domain: str
     friendly_name: Optional[str] = None
     data_kind: str # numeric, binary, enum, string
+    value_semantics: Optional[str] = "default" # default, instant, stateful
     chartable: bool = False
     icon: Optional[str] = None
     device_class: Optional[str] = None
@@ -28,6 +29,7 @@ class DashboardEntityData(BaseModel):
     friendly_name: str
     domain: str
     data_kind: str
+    value_semantics: str = "default"
     latest_point: Optional[DashboardDataPoint] = None
     sparkline: List[DashboardDataPoint] = []
     is_stale: bool = False
@@ -47,6 +49,7 @@ class TimeSeriesResponse(BaseModel):
     friendly_name: str
     domain: str
     data_kind: str
+    value_semantics: str = "default"
     chartable: bool
     points: List[DataPoint]
     meta: Dict[str, Any]

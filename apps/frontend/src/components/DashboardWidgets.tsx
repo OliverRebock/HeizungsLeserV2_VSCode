@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import api from '../lib/api';
 import type { DeviceDashboardResponse } from '../types/api';
 import ReactECharts from 'echarts-for-react';
-import { Trash2, Activity, AlertCircle, Clock } from 'lucide-react';
+import { Trash2, Activity, AlertCircle } from 'lucide-react';
 
 interface WidgetProps {
   deviceId: string;
@@ -159,6 +159,7 @@ export const MiniChartWidget: React.FC<WidgetProps> = ({ deviceId, entityId, tit
   const sparkline = entityData?.sparkline || [];
   const latestPoint = entityData?.latest_point;
   const isBinary = entityData?.data_kind === 'binary';
+  const isInstant = entityData?.value_semantics === 'instant';
   const isStale = entityData?.is_stale;
 
   const chartOptions = {
@@ -168,10 +169,10 @@ export const MiniChartWidget: React.FC<WidgetProps> = ({ deviceId, entityId, tit
     series: [{
       data: sparkline.map(p => [new Date(p.ts), p.value]),
       type: 'line',
-      smooth: !isBinary,
-      step: isBinary ? 'end' : false,
+      smooth: !isBinary && isInstant, // Smooth instant numeric values
+      step: isBinary ? 'end' : (!isInstant ? 'end' : false), // Stateful numeric use end-step
       showSymbol: false,
-      areaStyle: { 
+      areaStyle: isInstant ? undefined : { // Instant values (power) usually look better without area in mini charts
         opacity: 0.1, 
         color: isStale ? '#94a3b8' : (isBinary ? '#22c55e' : '#3b82f6') 
       },
