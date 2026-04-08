@@ -345,19 +345,31 @@ const DeviceDetailPage: React.FC = () => {
         extraCssText: 'box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border-radius: 8px; padding: 10px;',
         formatter: (params: any) => {
           if (!params || params.length === 0) return '';
+          
           // Only show unique series in tooltip to avoid clutter
           const seen = new Set();
           let res = `<div class="font-bold text-slate-800 mb-2 border-b pb-1 border-slate-100">${params[0].axisValueLabel}</div>`;
+          
           params.forEach((p: any) => {
             if (seen.has(p.seriesId)) return;
             seen.add(p.seriesId);
+            
+            // Check if this is the synthetic end point (carry forward)
+            // We can detect this if the point's timestamp matches the series last point
+            // and it's the very last data entry.
+            const series = seriesList.find(s => s.entity_id === p.seriesId);
+            const isSynthetic = series && series.points.length > 0 && 
+                               new Date(series.points[series.points.length - 1].ts).getTime() === p.value[0] &&
+                               p.dataIndex === series.points.length - 1;
+
             const val = p.data[1];
             const isAn = val === 1 || val === (p.seriesIndex + 1);
             const label = isAn ? 'An' : 'Aus';
+            
             res += `<div class="flex items-center justify-between gap-6 py-0.5">
                       <div class="flex items-center gap-2">
                         <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${p.color};"></span>
-                        <span class="text-slate-500 font-medium">${p.seriesName}</span>
+                        <span class="text-slate-500 font-medium">${p.seriesName}${isSynthetic ? ' <span class="text-[10px] italic opacity-60">(aktuell)</span>' : ''}</span>
                       </div>
                       <span class="font-bold ${isAn ? 'text-blue-600' : 'text-slate-400'}">${label}</span>
                     </div>`;
