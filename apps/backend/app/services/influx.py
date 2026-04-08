@@ -742,6 +742,7 @@ class InfluxService:
                 
             # 3. Carry Forward zum Endzeitpunkt (Last point to end of range)
             # Auf Benutzerwunsch: Letzten Wert bis zum rechten Rand (Uhrzeit jetzt) weiterzeichnen.
+            value_semantics = self._get_value_semantics(eid, unit_of_measurement)
             if points:
                 # Sortieren um sicherzustellen, dass wir den wirklich letzten haben
                 points.sort(key=lambda p: p.ts)
