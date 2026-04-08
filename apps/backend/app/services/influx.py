@@ -214,8 +214,8 @@ class InfluxService:
         lower_unit = unit.lower() if unit else ""
         
         # Instant/Output keywords (typically power, power output, watt, etc.)
-        instant_keywords = ["power", "leistung", "current_flow", "verbrauch", "output", "active_power", "apparent_power"]
-        instant_units = ["w", "kw", "va", "var", "hz"] # Watt, Kilowatt, Volt-Ampere, Hertz
+        instant_keywords = ["power", "leistung", "current_flow", "verbrauch", "output", "active_power", "apparent_power", "current"]
+        instant_units = ["w", "kw", "va", "var", "hz", "a"] # Watt, Kilowatt, Volt-Ampere, Hertz, Ampere
         
         # Stateful keywords (typically temperatures, pressure, setpoints, battery levels)
         stateful_keywords = ["temp", "druck", "pressure", "battery", "soc", "level", "setpoint", "target", "humidity", "feuchtigkeit"]
@@ -744,6 +744,10 @@ class InfluxService:
             # Auf Benutzerwunsch: Zeilinie IMMER bis zum rechten Rand (Uhrzeit jetzt) weiterziehen.
             # Fachregel: Leistungswerte (instant) fallen auf 0, wenn der letzte Punkt > 15 Min alt ist.
             value_semantics = self._get_value_semantics(eid, unit_of_measurement)
+            # DEBUG
+            if "power" in eid.lower() or "leistung" in eid.lower():
+                logger.info(f"INFLUX_DEBUG: {eid} has semantics: {value_semantics}")
+
             if points:
                 # Sortieren um sicherzustellen, dass wir den wirklich letzten haben
                 points.sort(key=lambda p: p.ts)
