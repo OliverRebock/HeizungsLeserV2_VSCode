@@ -1,4 +1,4 @@
-# Heizungsleser V2 – Intelligente Heizungsüberwachung & Analyse (v2.3.1)
+# Heizungsleser V2 – Intelligente Heizungsüberwachung & Analyse (v2.3.2)
 
 Heizungsleser V2 ist eine hochmoderne, mandantenfähige Plattform zur **Echtzeit-Überwachung**, **technischen Diagnose** und **KI-gestützten Optimierung** von Heizungssystemen (insbesondere Wärmepumpen). Die Anwendung schließt die Lücke zwischen komplexen Rohdaten aus Smart-Home-Systemen (wie Home Assistant) und verständlichen, handlungsorientierten Analysen für Fachbetriebe und Endkunden.
 

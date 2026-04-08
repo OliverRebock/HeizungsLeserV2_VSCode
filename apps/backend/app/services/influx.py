@@ -751,13 +751,14 @@ class InfluxService:
                 
                 # Wir bestimmen den absoluten Endzeitpunkt für das Carry-Forward
                 import pytz
-                from datetime import datetime as dt_final, timedelta as dt_timedelta
-                tz_berlin = pytz.timezone("Europe/Berlin")
+                from datetime import datetime as dt_final, timezone as dt_timezone
                 
-                now_berlin = dt_final.now(tz_berlin)
+                # Wir nutzen UTC für den robusten Zeitvergleich
+                now_utc = dt_final.now(dt_timezone.utc)
+                
                 final_end_ts = end_rfc
                 if "T" not in str(final_end_ts):
-                    final_end_ts = now_berlin.isoformat()
+                    final_end_ts = now_utc.isoformat()
                 
                 # Nur wenn der letzte Punkt zeitlich vor dem Ende liegt (ISO string compare)
                 if last_p.ts < final_end_ts:
@@ -767,14 +768,19 @@ class InfluxService:
                     # Logik für momentane Werte (Leistung etc.)
                     if value_semantics == "instant":
                         try:
-                            # Prüfen wie alt der letzte Punkt ist
+                            # Prüfen wie alt der letzte Punkt ist (Influx liefert UTC)
                             ts_to_parse = last_p.ts.replace('Z', '+00:00')
                             dt_last = datetime.fromisoformat(ts_to_parse)
+                            # Sicherstellen dass dt_last auch timezone-aware in UTC ist
+                            if dt_last.tzinfo is None:
+                                dt_last = dt_last.replace(tzinfo=dt_timezone.utc)
+                            
                             # Wenn der letzte Punkt älter als 15 Minuten ist, fallen wir am Rand auf 0
-                            if (now_berlin - dt_last).total_seconds() > 900: # 15 * 60
+                            diff_seconds = (now_utc - dt_last).total_seconds()
+                            if diff_seconds > 900: # 15 * 60
                                 carry_value = 0.0
-                                carry_state = "0.0 (Timeout)"
-                                logger.debug(f"INFLUX_SERVICE: Instant value {eid} timed out (>15m), falling to 0 at end.")
+                                carry_state = f"0.0 (Timeout: {int(diff_seconds/60)}m alt)"
+                                logger.debug(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), falling to 0 at end.")
                         except Exception as e:
                             logger.error(f"INFLUX_SERVICE: Error calculating timeout for {eid}: {e}")
 
