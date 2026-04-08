@@ -159,7 +159,6 @@ export const MiniChartWidget: React.FC<WidgetProps> = ({ deviceId, entityId, tit
   const sparkline = entityData?.sparkline || [];
   const latestPoint = entityData?.latest_point;
   const isBinary = entityData?.data_kind === 'binary';
-  const isInstant = entityData?.value_semantics === 'instant';
   const isStale = entityData?.is_stale;
 
   const chartOptions = {
@@ -169,10 +168,10 @@ export const MiniChartWidget: React.FC<WidgetProps> = ({ deviceId, entityId, tit
     series: [{
       data: sparkline.map(p => [new Date(p.ts), p.value]),
       type: 'line',
-      smooth: !isBinary && isInstant, // Smooth instant numeric values
-      step: isBinary ? 'end' : (!isInstant ? 'end' : false), // Stateful numeric use end-step
+      smooth: !isBinary, // Glatte Linien fÃ¼r alle numerischen Werte auf Benutzerwunsch
+      step: isBinary ? 'end' : false, // Keine Stufen mehr fÃ¼r numerische Werte
       showSymbol: false,
-      areaStyle: isInstant ? undefined : { // Instant values (power) usually look better without area in mini charts
+      areaStyle: {
         opacity: 0.1, 
         color: isStale ? '#94a3b8' : (isBinary ? '#22c55e' : '#3b82f6') 
       },

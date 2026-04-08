@@ -312,27 +312,28 @@ const DeviceDetailPage: React.FC = () => {
       console.log(`Series ${s.friendly_name} (${s.entity_id}) data points:`, seriesData.length);
 
       const color = getSeriesColor(idx);
-      const isInstant = s.value_semantics === 'instant';
-
+      
+      // Einheitlicher numerischer Stil auf Benutzerwunsch:
+      // Glatte, gefÃ¼llte FlÃ¤chenlinie (wie bei der AuÃŸentemperatur),
+      // OHNE Stufen ('step') und OHNE Carry-Forward bis zum Rand.
       return {
         id: s.entity_id,
         name: s.friendly_name,
         type: 'line',
-        showSymbol: isInstant, // Show dots for instant values
-        symbolSize: isInstant ? 4 : 0,
-        step: isInstant ? false : 'end', // Stateful values use steps, instant values connect directly or use symbols
-        smooth: isInstant, // Instant values look better smoothed or direct, stateful MUST be end-step
-        connectNulls: false,
+        showSymbol: false, 
+        symbolSize: 4,
+        step: false, // Keine Stufen mehr fÃ¼r numerische Werte
+        smooth: true, // Glatte Linien wie gewünscht
+        connectNulls: false, // LÃ¼cken lassen, wenn keine Daten vorliegen
         lineStyle: { 
-          width: 2.5, 
+          width: 3, 
           color: color,
-          type: isInstant ? 'dashed' : 'solid', // Visual hint for instant values
-          opacity: isInstant ? 0.8 : 1
+          opacity: 1
         },
         itemStyle: { color: color },
-        areaStyle: isInstant ? undefined : { // Only show area for stateful values
+        areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: `${color}20` },
+            { offset: 0, color: `${color}30` },
             { offset: 1, color: `${color}00` }
           ])
         },

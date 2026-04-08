@@ -741,16 +741,13 @@ class InfluxService:
                 logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")
                 
             # 3. Carry Forward zum Endzeitpunkt (Last point to end of range)
-            value_semantics = self._get_value_semantics(eid, unit_of_measurement)
-            
+            # Auf Benutzerwunsch: Letzten Wert bis zum rechten Rand (Uhrzeit jetzt) weiterzeichnen.
             if points:
                 # Sortieren um sicherzustellen, dass wir den wirklich letzten haben
                 points.sort(key=lambda p: p.ts)
                 last_p = points[-1]
                 
                 # Wir bestimmen den absoluten Endzeitpunkt für das Carry-Forward
-                # Wenn end_rfc ein absoluter Timestamp ist, nehmen wir diesen.
-                # Wenn nicht (z.B. "now()"), nehmen wir die aktuelle Zeit in Berlin
                 import pytz
                 from datetime import datetime as dt_final
                 tz_berlin = pytz.timezone("Europe/Berlin")
@@ -760,13 +757,9 @@ class InfluxService:
                     final_end_ts = dt_final.now(tz_berlin).isoformat()
                 
                 # Nur wenn der letzte Punkt zeitlich vor dem Ende liegt (ISO string compare)
-                # UND wenn es KEINE instant_numeric Entität ist (Leistungswerte etc.)
                 if last_p.ts < final_end_ts:
-                    if value_semantics != "instant":
-                        points.append(DataPoint(ts=final_end_ts, value=last_p.value, state=last_p.state))
-                        logger.debug(f"INFLUX_SERVICE: Carrying forward last value for {eid} to absolute end: {final_end_ts}")
-                    else:
-                        logger.debug(f"INFLUX_SERVICE: Skipping carry-forward for instant_numeric entity: {eid}")
+                    points.append(DataPoint(ts=final_end_ts, value=last_p.value, state=last_p.state))
+                    logger.debug(f"INFLUX_SERVICE: Carrying forward last value for {eid} to absolute end: {final_end_ts}")
 
             # --- NEU: Double Padding am Anfang für Step-Lines (HA-Style) ---
             # Um schräge Linien vom Start zum ersten echten Punkt zu vermeiden, 
