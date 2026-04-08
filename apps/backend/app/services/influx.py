@@ -800,18 +800,31 @@ class InfluxService:
                             # Wenn wir uns am aktuellen Rand befinden (HEUTE / JETZT):
                             # Wenn der letzte Punkt älter als 15 Minuten ist, fallen wir am Rand auf 0
                             if is_near_now:
+                                # Wir prüfen gegen den absoluten JETZT Zeitpunkt, nicht gegen das Graph-Ende,
+                                # um Geisterlinien am aktuellen Rand zu vermeiden.
                                 diff_seconds = (now_utc - dt_last).total_seconds()
                                 if diff_seconds > 900: # 15 * 60
+                                    # NEU: Wir fügen ZWEI Punkte ein, um eine saubere Kante zu zeichnen
+                                    # 1. Einen Punkt direkt beim letzten echten Wert + 1ms (damit die Linie dort endet)
+                                    # 2. Einen Punkt am rechten Rand mit 0.0
+                                    dt_drop = dt_last + dt_timedelta(milliseconds=1)
+                                    drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
+                                    points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
+                                    
                                     carry_value = 0.0
                                     carry_state = f"0.0 (Timeout: {int(diff_seconds/60)}m alt)"
-                                    logger.debug(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), falling to 0 at end.")
+                                    logger.info(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), adding drop-point and falling to 0 at end.")
                             else:
                                 # Wir sind in einer historischen Ansicht (z.B. GESTERN).
                                 # Hier fallen wir AUCH auf 0 am Ende des Zeitraums, wenn der letzte Punkt 
                                 # vor dem Ende des Zeitraums lag und wir wissen, dass danach nichts mehr kam.
-                                # Der Benutzer möchte das Verhalten von HEUTE (auf 0 fallen) auch hier.
                                 diff_to_end = (dt_end - dt_last).total_seconds()
                                 if diff_to_end > 900:
+                                    # Auch hier: Erst halten, dann fallen
+                                    dt_drop = dt_last + dt_timedelta(milliseconds=1)
+                                    drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
+                                    points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
+                                    
                                     carry_value = 0.0
                                     carry_state = "0.0 (Historical Timeout)"
                                     logger.debug(f"INFLUX_SERVICE: Historical timeout for {eid} at {final_end_ts}")
