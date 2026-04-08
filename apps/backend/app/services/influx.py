@@ -379,7 +379,7 @@ class InfluxService:
         """
         Fetch specialized dashboard data: 
         - the very last REAL point (no carry forward, no padding)
-        - a small sparkline (last 24h, no artificial start/end points)
+        - a clean, aggregated sparkline (last 24h, 48 points)
         - freshness check
         """
         import pytz
@@ -388,87 +388,78 @@ class InfluxService:
         bucket = device.influx_database_name or settings.INFLUXDB_BUCKET
         query_api = self.client.query_api()
         tz_berlin = pytz.timezone("Europe/Berlin")
-        now_berlin = datetime.now(tz_berlin)
         
         results = []
         
         for eid in entity_ids:
-            # 1. Get the last 10 points for sparkline + latest info
-            # We query last 24h by default for the sparkline
-            query = f'''
-                from(bucket: "{bucket}")
-                |> range(start: -24h)
-                |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
-                |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state" or r["_field"] == "friendly_name_str")
-                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-                |> sort(columns: ["_time"], desc: false)
-                |> keep(columns: ["_time", "value", "state", "friendly_name_str"])
-            '''
-            
             try:
-                tables = query_api.query(query=query)
-                all_points = []
-                friendly_name = eid
+                # 1. Get the last point EVER for this entity (latest point)
+                last_query = f'''
+                    from(bucket: "{bucket}")
+                    |> range(start: 0)
+                    |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                    |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
+                    |> last()
+                    |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+                '''
                 
-                for table in tables:
+                latest_point = None
+                friendly_name = eid
+                last_tables = query_api.query(query=last_query)
+                for table in last_tables:
                     for record in table.records:
                         ts = record.get_time().isoformat()
                         val = record.values.get("value")
                         if val is None: val = record.values.get("state")
                         
-                        if record.values.get("friendly_name_str"):
-                            friendly_name = self._clean_friendly_name(record.values.get("friendly_name_str"))
-                            
                         num_val = 0.0
                         state = str(val) if val is not None else ""
-                        if isinstance(val, (int, float)):
-                            num_val = float(val)
-                        elif isinstance(val, bool):
-                            num_val = 1.0 if val else 0.0
-                            state = "on" if val else "off"
-                        elif isinstance(val, str):
+                        if isinstance(val, (int, float)): num_val = float(val)
+                        elif isinstance(val, bool): num_val = 1.0 if val else 0.0
+                        elif isinstance(val, str): 
                             state = val
                             low_val = val.lower()
                             if low_val in ['on', 'true', 'active', 'heating', 'an']: num_val = 1.0
                             elif low_val in ['off', 'false', 'idle', 'inactive', 'aus']: num_val = 0.0
                         
-                        all_points.append(DashboardDataPoint(
-                            ts=ts, 
-                            value=num_val, 
-                            state=state, 
-                            is_actual=True
-                        ))
+                        latest_point = DashboardDataPoint(ts=ts, value=num_val, state=state, is_actual=True)
+
+                # 2. Get aggregated sparkline (last 24h, 48 points/buckets)
+                # We use 30m windows for 24h = 48 points
+                # For sparkline we only care about numeric value
+                sparkline_query = f'''
+                    from(bucket: "{bucket}")
+                    |> range(start: -24h)
+                    |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                    |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
+                    |> aggregateWindow(every: 30m, fn: mean, createEmpty: false)
+                    |> keep(columns: ["_time", "_value"])
+                '''
                 
-                # If no data in 24h, try to get at least the absolute last point ever
-                latest_point = None
-                if all_points:
-                    latest_point = all_points[-1]
-                else:
-                    last_query = f'''
-                        from(bucket: "{bucket}")
-                        |> range(start: 0)
-                        |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
-                        |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
-                        |> last()
-                        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-                    '''
-                    last_tables = query_api.query(query=last_query)
-                    for table in last_tables:
-                        for record in table.records:
-                            ts = record.get_time().isoformat()
-                            val = record.values.get("value")
-                            if val is None: val = record.values.get("state")
-                            num_val = 0.0
-                            state = str(val) if val is not None else ""
-                            if isinstance(val, (int, float)): num_val = float(val)
-                            elif isinstance(val, bool): num_val = 1.0 if val else 0.0
-                            elif isinstance(val, str): 
-                                state = val
-                                low_val = val.lower()
-                                if low_val in ['on', 'true', 'active', 'heating', 'an']: num_val = 1.0
-                                elif low_val in ['off', 'false', 'idle', 'inactive', 'aus']: num_val = 0.0
-                            
-                            latest_point = DashboardDataPoint(ts=ts, value=num_val, state=state, is_actual=True)
+                sparkline_points = []
+                spark_tables = query_api.query(query=sparkline_query)
+                for table in spark_tables:
+                    for record in table.records:
+                        sparkline_points.append(DashboardDataPoint(
+                            ts=record.get_time().isoformat(),
+                            value=float(record.get_value()) if record.get_value() is not None else 0.0,
+                            state="",
+                            is_actual=False
+                        ))
+
+                # 3. Get friendly name if possible
+                fn_query = f'''
+                    from(bucket: "{bucket}")
+                    |> range(start: -7d)
+                    |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                    |> filter(fn: (r) => r["_field"] == "friendly_name_str")
+                    |> last()
+                '''
+                fn_tables = query_api.query(query=fn_query)
+                for table in fn_tables:
+                    for record in table.records:
+                        if record.get_value():
+                            friendly_name = self._clean_friendly_name(record.get_value())
 
                 # Freshness check
                 is_stale = True
@@ -498,7 +489,7 @@ class InfluxService:
                     domain=eid.split('.')[0] if '.' in eid else "sensor",
                     data_kind=data_kind,
                     latest_point=latest_point,
-                    sparkline=all_points[-20:] if len(all_points) > 20 else all_points,
+                    sparkline=sparkline_points,
                     is_stale=is_stale,
                     freshness_info=freshness_info
                 ))

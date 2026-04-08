@@ -38,7 +38,7 @@ export const ValueWidget: React.FC<WidgetProps> = ({ deviceId, entityId, title, 
     >
       <div className="flex justify-between items-start mb-4">
         <div className={`p-2 rounded-lg ${isStale ? 'bg-amber-50 text-amber-500' : 'bg-blue-50 text-blue-600'}`}>
-          {isStale ? <Clock className="w-4 h-4" /> : <Activity className="w-4 h-4" />}
+          <Activity className="w-4 h-4" />
         </div>
         <button 
           onClick={(e) => {
@@ -53,7 +53,7 @@ export const ValueWidget: React.FC<WidgetProps> = ({ deviceId, entityId, title, 
       <div className="flex justify-between items-baseline mb-1">
         <h4 className="text-slate-500 text-xs font-bold uppercase tracking-wider truncate mr-2" title={title}>{title}</h4>
         {entityData?.freshness_info && (
-          <span className={`text-[10px] font-medium ${isStale ? 'text-amber-500' : 'text-slate-400'}`}>
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${isStale ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
             {entityData.freshness_info}
           </span>
         )}
@@ -102,8 +102,8 @@ export const StatusWidget: React.FC<WidgetProps> = ({ deviceId, entityId, title,
       className={`bg-white p-6 rounded-2xl border border-slate-200 shadow-sm group hover:border-blue-300 transition-all ${onClick ? 'cursor-pointer active:scale-95' : ''}`}
     >
       <div className="flex justify-between items-start mb-4">
-        <div className={`p-2 rounded-lg ${hasData ? (isStale ? 'bg-amber-50 text-amber-500' : (isOn ? 'bg-green-50 text-green-600' : 'bg-slate-50 text-slate-400')) : 'bg-slate-50 text-slate-300'}`}>
-          {isStale ? <Clock className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+        <div className={`p-2 rounded-lg ${hasData ? (isOn ? 'bg-green-50 text-green-600' : 'bg-slate-50 text-slate-400') : 'bg-slate-50 text-slate-300'}`}>
+          <AlertCircle className="w-4 h-4" />
         </div>
         <button 
           onClick={(e) => {
@@ -118,9 +118,11 @@ export const StatusWidget: React.FC<WidgetProps> = ({ deviceId, entityId, title,
       <div className="flex justify-between items-baseline mb-1">
         <h4 className="text-slate-500 text-xs font-bold uppercase tracking-wider truncate mr-2" title={title}>{title}</h4>
         {entityData?.freshness_info && (
-          <span className={`text-[10px] font-medium ${isStale ? 'text-amber-500' : 'text-slate-400'}`}>
-            {entityData.freshness_info}
-          </span>
+          <div className="flex flex-col items-end">
+             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${isStale ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
+                {entityData.freshness_info}
+             </span>
+          </div>
         )}
       </div>
       <div className="flex items-center gap-3">
@@ -128,9 +130,9 @@ export const StatusWidget: React.FC<WidgetProps> = ({ deviceId, entityId, title,
           <div className="h-8 w-32 bg-slate-100 animate-pulse rounded"></div>
         ) : hasData ? (
           <>
-            <div className={`w-3 h-3 rounded-full ${isStale ? 'bg-amber-400' : (isOn ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-slate-300')}`}></div>
-            <span className={`text-xl font-bold ${isStale ? 'text-amber-600' : (isOn ? 'text-green-700' : 'text-slate-500')}`}>
-              {isStale ? 'VERALTET' : (isOn ? 'AKTIV' : 'AUS')}
+            <div className={`w-3 h-3 rounded-full ${isOn ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-slate-300'}`}></div>
+            <span className={`text-xl font-bold ${isOn ? 'text-green-700' : 'text-slate-500'}`}>
+              {isOn ? 'AKTIV' : 'AUS'}
             </span>
           </>
         ) : (
@@ -160,7 +162,7 @@ export const MiniChartWidget: React.FC<WidgetProps> = ({ deviceId, entityId, tit
   const isStale = entityData?.is_stale;
 
   const chartOptions = {
-    grid: { left: 0, right: 0, top: 5, bottom: 0 },
+    grid: { left: 0, right: 0, top: 10, bottom: 0 },
     xAxis: { type: 'time', show: false },
     yAxis: { type: 'value', show: false, scale: true },
     series: [{
@@ -169,11 +171,17 @@ export const MiniChartWidget: React.FC<WidgetProps> = ({ deviceId, entityId, tit
       smooth: !isBinary,
       step: isBinary ? 'end' : false,
       showSymbol: false,
-      areaStyle: { opacity: 0.1, color: isStale ? '#94a3b8' : '#3b82f6' },
-      lineStyle: { width: 1.5, color: isStale ? '#94a3b8' : '#3b82f6' },
+      areaStyle: { 
+        opacity: 0.1, 
+        color: isStale ? '#94a3b8' : (isBinary ? '#22c55e' : '#3b82f6') 
+      },
+      lineStyle: { 
+        width: 2, 
+        color: isStale ? '#94a3b8' : (isBinary ? '#22c55e' : '#3b82f6') 
+      },
     }],
     tooltip: { show: false },
-    animation: false
+    animation: true
   };
 
   return (
@@ -195,15 +203,15 @@ export const MiniChartWidget: React.FC<WidgetProps> = ({ deviceId, entityId, tit
       </div>
       <div className="flex justify-between items-baseline mb-2">
         <span className={`text-xl font-bold ${isStale ? 'text-slate-500' : 'text-slate-900'}`}>
-          {latestPoint?.value !== undefined ? latestPoint.value.toLocaleString('de-DE') : '-'}
+          {latestPoint?.value !== undefined ? (isBinary ? (latestPoint.value === 1 ? 'AN' : 'AUS') : latestPoint.value.toLocaleString('de-DE')) : '-'}
         </span>
         {entityData?.freshness_info && (
-          <span className={`text-[9px] font-medium ${isStale ? 'text-amber-500' : 'text-slate-400'}`}>
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${isStale ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-400'}`}>
             {entityData.freshness_info}
           </span>
         )}
       </div>
-      <div className="flex-1 min-h-[50px]">
+      <div className="flex-1 min-h-[60px]">
         {isLoading ? (
           <div className="h-full w-full bg-slate-50 animate-pulse rounded-lg"></div>
         ) : sparkline.length > 0 ? (
