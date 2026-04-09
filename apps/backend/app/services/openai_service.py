@@ -22,7 +22,7 @@ class OpenAIService:
             raise ValueError("KI-Analyse ist deaktiviert oder kein OpenAI API-Key konfiguriert.")
 
         run_id = summary_data.get("analysis_run_id", "unknown")
-        logger.info(f"[{run_id}] Starting KI-Analysis for device {summary_data.get('device_name')} using GPT-5.4. Focus: {focus}")
+        logger.info(f"[{run_id}] Starting KI-Analysis for device {summary_data.get('device_name')} using {self.model}. Focus: {focus}")
         
         error_candidates_str = ""
         if "error_candidates" in summary_data and summary_data["error_candidates"]:
