@@ -240,117 +240,126 @@ const DeviceDetailPage: React.FC = () => {
 
   const groupId = deviceId ? `device-${deviceId}-compare` : 'compare-group';
 
-  const numericOptions = (seriesList: TimeSeries[], unitLabel: string) => ({
-    tooltip: { 
-      trigger: 'axis', 
-      axisPointer: { 
-        type: 'cross',
-        label: {
-          backgroundColor: '#6a7985'
-        }
-      },
-      backgroundColor: 'rgba(255, 255, 255, 0.95)',
-      borderColor: '#e2e8f0',
-      borderWidth: 1,
-      textStyle: { color: '#1e293b', fontSize: 12 },
-      extraCssText: 'shadow-sm rounded-lg border border-slate-200 p-2',
-      formatter: (params: any) => {
-        if (!params || params.length === 0) return '';
-        let res = `<div class="font-bold text-slate-800 mb-1 border-b pb-1 border-slate-100">${params[0].axisValueLabel}</div>`;
-        params.forEach((p: any) => {
-          // Find serie by ID to be robust
-          const s = seriesList.find(item => item.friendly_name === p.seriesName || item.entity_id === p.seriesId);
-          const unit = s?.meta?.unit_of_measurement || unitLabel || '';
-          const val = typeof p.data[1] === 'number' ? p.data[1].toLocaleString('de-DE', { maximumFractionDigits: 1 }) : p.data[1];
-          res += `<div class="flex items-center justify-between gap-4 py-0.5">
-                    <div class="flex items-center gap-2">
-                      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:${p.color};"></span>
-                      <span class="text-slate-600 font-medium">${p.seriesName}</span>
-                    </div>
-                    <span class="font-bold text-slate-900">${val} ${unit}</span>
-                  </div>`;
-        });
-        return res;
-      }
-    },
-    grid: { left: '3%', right: '3%', bottom: 30, top: 40, containLabel: true },
-    legend: {
-      show: true,
-      top: 0,
-      icon: 'circle',
-      textStyle: { color: '#64748b', fontSize: 11 },
-      itemWidth: 10,
-      itemHeight: 10
-    },
-    xAxis: { 
-      type: 'time', 
-      boundaryGap: false,
-      axisLabel: { 
-        color: '#94a3b8', 
-        fontSize: 10,
-        formatter: (value: number) => {
-          const date = new Date(value);
-          return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-        }
-      },
-      axisLine: { lineStyle: { color: '#f1f5f9' } },
-      splitLine: { show: true, lineStyle: { color: '#f8fafc' } },
-    },
-    yAxis: { 
-      type: 'value', 
-      scale: true, 
-      min: (value: any) => {
-        // Sicherstellen dass 0 immer Teil der Achse ist oder zumindest nah dran
-        return value.min > 0 ? 0 : value.min;
-      },
-      name: unitLabel || undefined, 
-      nameTextStyle: { color: '#94a3b8', fontSize: 10 },
-      axisLabel: { color: '#94a3b8', fontSize: 10 },
-      axisLine: { show: false },
-      splitLine: { lineStyle: { color: '#f1f5f9' } }
-    },
-    series: seriesList.map((s, idx) => {
-      // Sort points by timestamp to ensure correct line drawing
-      const sortedPoints = [...s.points].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-      const seriesData = sortedPoints.map(p => [new Date(p.ts).getTime(), p.value ?? null]);
-      console.log(`Series ${s.friendly_name} (${s.entity_id}) data points:`, seriesData.length);
+  const numericOptions = (seriesList: TimeSeries[], unitLabel: string) => {
+    // Get range from the first series if available to keep X-axis clean
+    const range = (chartData?.range) || (modalChartData?.range);
+    const minTime = range?.from ? new Date(range.from).getTime() : undefined;
+    const maxTime = range?.to ? new Date(range.to).getTime() : undefined;
 
-      const color = getSeriesColor(idx);
-      
-      // Einheitlicher numerischer Stil auf Benutzerwunsch:
-      // Ehrliche Darstellung ohne künstliche Glättung (smooth: false), 
-      // um Artefakte/Verfälschungen am Rand zu vermeiden.
-      return {
-        id: s.entity_id,
-        name: s.friendly_name,
-        type: 'line',
-        showSymbol: false, 
-        symbolSize: 4,
-        step: false, // Keine Stufen mehr fÃ¼r numerische Werte
-        smooth: false, // DEAKTIVIERT: Ehrliche Rohdatenkurve statt künstlicher Artefakte
-        connectNulls: false, // LÃ¼cken lassen, wenn keine Daten vorliegen
-        lineStyle: { 
-          width: 2.5, // Etwas feiner für ehrliche Darstellung
-          color: color,
-          opacity: 1
+    return {
+      tooltip: { 
+        trigger: 'axis', 
+        axisPointer: { 
+          type: 'cross',
+          label: {
+            backgroundColor: '#6a7985'
+          }
         },
-        itemStyle: { color: color },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: `${color}25` },
-            { offset: 1, color: `${color}00` }
-          ])
+        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        borderColor: '#e2e8f0',
+        borderWidth: 1,
+        textStyle: { color: '#1e293b', fontSize: 12 },
+        extraCssText: 'shadow-sm rounded-lg border border-slate-200 p-2',
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          let res = `<div class="font-bold text-slate-800 mb-1 border-b pb-1 border-slate-100">${params[0].axisValueLabel}</div>`;
+          params.forEach((p: any) => {
+            // Find serie by ID to be robust
+            const s = seriesList.find(item => item.friendly_name === p.seriesName || item.entity_id === p.seriesId);
+            const unit = s?.meta?.unit_of_measurement || unitLabel || '';
+            const val = typeof p.data[1] === 'number' ? p.data[1].toLocaleString('de-DE', { maximumFractionDigits: 1 }) : p.data[1];
+            res += `<div class="flex items-center justify-between gap-4 py-0.5">
+                      <div class="flex items-center gap-2">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:${p.color};"></span>
+                        <span class="text-slate-600 font-medium">${p.seriesName}</span>
+                      </div>
+                      <span class="font-bold text-slate-900">${val} ${unit}</span>
+                    </div>`;
+          });
+          return res;
+        }
+      },
+      grid: { left: '3%', right: '3%', bottom: 30, top: 40, containLabel: true },
+      legend: {
+        show: true,
+        top: 0,
+        icon: 'circle',
+        textStyle: { color: '#64748b', fontSize: 11 },
+        itemWidth: 10,
+        itemHeight: 10
+      },
+      xAxis: { 
+        type: 'time', 
+        boundaryGap: false,
+        min: minTime,
+        max: maxTime,
+        axisLabel: { 
+          color: '#94a3b8', 
+          fontSize: 10,
+          formatter: (value: number) => {
+            const date = new Date(value);
+            return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          }
         },
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          label: { show: false },
-          data: [{ yAxis: 0, lineStyle: { color: '#e2e8f0', type: 'dashed', width: 1 } }]
+        axisLine: { lineStyle: { color: '#f1f5f9' } },
+        splitLine: { show: true, lineStyle: { color: '#f8fafc' } },
+      },
+      yAxis: { 
+        type: 'value', 
+        scale: true, 
+        min: (value: any) => {
+          // Sicherstellen dass 0 immer Teil der Achse ist oder zumindest nah dran
+          return value.min > 0 ? 0 : value.min;
         },
-        data: seriesData
-      };
-    })
-  });
+        name: unitLabel || undefined, 
+        nameTextStyle: { color: '#94a3b8', fontSize: 10 },
+        axisLabel: { color: '#94a3b8', fontSize: 10 },
+        axisLine: { show: false },
+        splitLine: { lineStyle: { color: '#f1f5f9' } }
+      },
+      series: seriesList.map((s, idx) => {
+        // Sort points by timestamp to ensure correct line drawing
+        const sortedPoints = [...s.points].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+        const seriesData = sortedPoints.map(p => [new Date(p.ts).getTime(), p.value ?? null]);
+        console.log(`Series ${s.friendly_name} (${s.entity_id}) data points:`, seriesData.length);
+
+        const color = getSeriesColor(idx);
+        
+        // Einheitlicher numerischer Stil auf Benutzerwunsch:
+        // Ehrliche Darstellung ohne künstliche Glättung (smooth: false), 
+        // um Artefakte/Verfälschungen am Rand zu vermeiden.
+        return {
+          id: s.entity_id,
+          name: s.friendly_name,
+          type: 'line',
+          showSymbol: false, 
+          symbolSize: 4,
+          step: false, // Keine Stufen mehr fÃ¼r numerische Werte
+          smooth: false, // DEAKTIVIERT: Ehrliche Rohdatenkurve statt künstlicher Artefakte
+          connectNulls: false, // LÃ¼cken lassen, wenn keine Daten vorliegen
+          lineStyle: { 
+            width: 2.5, // Etwas feiner für ehrliche Darstellung
+            color: color,
+            opacity: 1
+          },
+          itemStyle: { color: color },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: `${color}25` },
+              { offset: 1, color: `${color}00` }
+            ])
+          },
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            label: { show: false },
+            data: [{ yAxis: 0, lineStyle: { color: '#e2e8f0', type: 'dashed', width: 1 } }]
+          },
+          data: seriesData
+        };
+      })
+    };
+  };
 
   const binaryOptions = (seriesList: TimeSeries[]) => {
     // In Home Assistant, state history is shown as horizontal bars.

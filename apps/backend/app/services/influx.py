@@ -692,29 +692,10 @@ class InfluxService:
                                 logger.debug(f"INFLUX_SERVICE: Added START-PADDING for {data_kind} entity {eid}: {val}")
                             else:
                                 # Für NUMERISCHE Werte (Temperaturen etc.): 
-                                # Wir fügen den Punkt mit seinem ECHTEN Zeitstempel ein.
-                                # WICHTIG: Wenn dieser Punkt mehr als 30 Minuten vor dem Range-Start liegt,
-                                # fügen wir danach einen NULL-Punkt ein, um eine falsche Verbindung 
-                                # in den Chart-Bereich zu verhindern (Gap).
-                                real_ts = record.get_time().isoformat()
-                                points.append(DataPoint(ts=real_ts, value=num_val, state=state))
-                                logger.debug(f"INFLUX_SERVICE: Added last known REAL point for numeric entity {eid}: {val} at {real_ts}")
-                                
-                                try:
-                                    ts_to_parse = real_ts.replace('Z', '+00:00')
-                                    dt_last = datetime.fromisoformat(ts_to_parse)
-                                    
-                                    # Wenn wir einen Start-RFC haben, vergleichen wir damit
-                                    if "T" in start_rfc:
-                                        dt_start = datetime.fromisoformat(start_rfc.replace('Z', '+00:00'))
-                                        if (dt_start - dt_last).total_seconds() > 1800: # > 30 Min Lücke
-                                            # Wir fügen einen Punkt mit None 1ms nach dem letzten echten Punkt ein
-                                            dt_gap = dt_last + timedelta(milliseconds=1)
-                                            gap_ts = dt_gap.isoformat().replace('+00:00', 'Z')
-                                            points.append(DataPoint(ts=gap_ts, value=None, state="gap"))
-                                            logger.debug(f"INFLUX_SERVICE: Added NULL-GAP after pre-range point for {eid}")
-                                except Exception as e:
-                                    logger.error(f"INFLUX_SERVICE: Error calculating gap after pre-range point: {e}")
+                                # AUF BENUTZERWUNSCH: Wir fügen KEINEN Punkt vor dem Range-Start mehr ein,
+                                # um zu verhindern, dass die X-Achse nach links gedehnt wird.
+                                # Der Punkt wird nur geloggt, aber NICHT in die Serie aufgenommen.
+                                logger.debug(f"INFLUX_SERVICE: Skipping pre-range point for numeric entity {eid} to keep X-axis clean: {val}")
             except Exception as e:
                 logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
 
