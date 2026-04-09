@@ -57,4 +57,5 @@ class TimeSeriesResponse(BaseModel):
 class DeviceDataResponse(BaseModel):
     device_id: int
     range: Dict[str, Any]
+    range_resolved: Optional[Dict[str, str]] = None
     series: List[TimeSeriesResponse]

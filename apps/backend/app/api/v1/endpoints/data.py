@@ -85,10 +85,11 @@ async def read_device_timeseries(
         else:
             clean_ids.append(eid.strip())
     
-    series = await influx_service.get_timeseries(db_device, clean_ids, query_start, end)
+    result = await influx_service.get_timeseries(db_device, clean_ids, query_start, end)
     
     return DeviceDataResponse(
         device_id=device_id,
         range={"from": query_start, "to": end},
-        series=series
+        range_resolved=result.get("range_resolved"),
+        series=result.get("series", [])
     )

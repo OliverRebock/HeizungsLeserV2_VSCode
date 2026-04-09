@@ -242,7 +242,7 @@ const DeviceDetailPage: React.FC = () => {
 
   const numericOptions = (seriesList: TimeSeries[], unitLabel: string) => {
     // Get range from the first series if available to keep X-axis clean
-    const range = (chartData?.range) || (modalChartData?.range);
+    const range = (chartData?.range_resolved) || (modalChartData?.range_resolved);
     const minTime = range?.from ? new Date(range.from).getTime() : undefined;
     const maxTime = range?.to ? new Date(range.to).getTime() : undefined;
 

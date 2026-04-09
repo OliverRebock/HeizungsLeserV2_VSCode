@@ -85,6 +85,10 @@ export interface DeviceDataResponse {
     from: string;
     to?: string;
   };
+  range_resolved?: {
+    from: string;
+    to: string;
+  };
   series: TimeSeries[];
 }
 

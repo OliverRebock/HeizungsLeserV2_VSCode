@@ -545,18 +545,20 @@ class InfluxService:
         entity_ids: List[str], 
         start: str, 
         end: str
-    ) -> List[TimeSeriesResponse]:
+    ) -> Dict[str, Any]:
         """
         Fetch timeseries data from InfluxDB 2 using Flux.
-        Optimized to find data by either Measurement OR entity_id Tag.
+        Returns a dict containing 'series' and 'range_resolved'.
         """
         bucket = device.influx_database_name or settings.INFLUXDB_BUCKET
         query_api = self.client.query_api()
         results = []
 
+        import pytz
+        from datetime import datetime, timedelta, timezone as dt_timezone
+        tz_berlin = pytz.timezone("Europe/Berlin")
+
         def format_time(t, default_val="-24h"):
-            import pytz
-            from datetime import datetime, timedelta
             logger.debug(f"INFLUX_SERVICE: Formatting time input: '{t}' (type={type(t)})")
             if not t: return default_val
             if isinstance(t, str):
@@ -564,14 +566,14 @@ class InfluxService:
                 
                 # Check for keywords first to avoid matching them in the relative check (e.g. 'today' contains 'd')
                 if t == "today": 
-                    now_val = datetime.now(pytz.timezone("Europe/Berlin"))
+                    now_val = datetime.now(tz_berlin)
                     today_start = now_val.replace(hour=0, minute=0, second=0, microsecond=0)
                     iso_start = today_start.isoformat()
                     logger.debug(f"INFLUX_SERVICE: 'today' resolved to (Berlin): {iso_start}")
                     return iso_start
                     
                 if t == "yesterday":
-                    now_val = datetime.now(pytz.timezone("Europe/Berlin"))
+                    now_val = datetime.now(tz_berlin)
                     yesterday_start = (now_val - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
                     yesterday_end = yesterday_start.replace(hour=23, minute=59, second=59, microsecond=999999)
                     iso_start = yesterday_start.isoformat()
@@ -580,14 +582,14 @@ class InfluxService:
                     return f"{iso_start}|{iso_end}"
                 
                 if t == "this_week":
-                    now_val = datetime.now(pytz.timezone("Europe/Berlin"))
+                    now_val = datetime.now(tz_berlin)
                     monday_start = (now_val - timedelta(days=now_val.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
                     iso_start = monday_start.isoformat()
                     logger.debug(f"INFLUX_SERVICE: 'this_week' resolved to (Berlin): {iso_start}")
                     return iso_start
 
                 if t == "this_month":
-                    now_val = datetime.now(pytz.timezone("Europe/Berlin"))
+                    now_val = datetime.now(tz_berlin)
                     month_start = now_val.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                     iso_start = month_start.isoformat()
                     logger.debug(f"INFLUX_SERVICE: 'this_month' resolved to (Berlin): {iso_start}")
@@ -612,6 +614,22 @@ class InfluxService:
         # Handle the special "yesterday" pipe return
         if "|" in flux_start:
             flux_start, flux_end = flux_start.split("|")
+
+        # Resolve relative times to absolute for the frontend
+        now_utc = datetime.now(dt_timezone.utc)
+        resolved_from = flux_start
+        resolved_to = flux_end if flux_end != "now()" else now_utc.isoformat()
+
+        if isinstance(flux_start, str) and flux_start.startswith("-") and "T" not in flux_start:
+            # Relative duration
+            try:
+                val = int(flux_start[1:-1])
+                unit = flux_start[-1]
+                if unit == 'h': resolved_from = (now_utc - timedelta(hours=val)).isoformat()
+                elif unit == 'd': resolved_from = (now_utc - timedelta(days=val)).isoformat()
+                elif unit == 'm': resolved_from = (now_utc - timedelta(minutes=val)).isoformat()
+                elif unit == 's': resolved_from = (now_utc - timedelta(seconds=val)).isoformat()
+            except: pass
 
         logger.debug(f"INFLUX_SERVICE: Final flux range before fixing: {flux_start} to {flux_end}")
 
@@ -917,7 +935,13 @@ class InfluxService:
                 }
             ))
             
-        return results
+        return {
+            "series": results,
+            "range_resolved": {
+                "from": resolved_from,
+                "to": resolved_to
+            }
+        }
 
 influx_service = InfluxService(
     host=settings.INFLUXDB_URL,
