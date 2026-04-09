@@ -692,13 +692,29 @@ class InfluxService:
                                 logger.debug(f"INFLUX_SERVICE: Added START-PADDING for {data_kind} entity {eid}: {val}")
                             else:
                                 # Für NUMERISCHE Werte (Temperaturen etc.): 
-                                # Wir fügen den Punkt mit seinem ECHTEN Zeitstempel ein, 
-                                # NICHT künstlich am Range-Beginn. Das verhindert die "Geister-Linie" 
-                                # vom Start des Graphen zum ersten echten Punkt, wenn der letzte 
-                                # Punkt eigentlich Stunden her ist.
+                                # Wir fügen den Punkt mit seinem ECHTEN Zeitstempel ein.
+                                # WICHTIG: Wenn dieser Punkt mehr als 30 Minuten vor dem Range-Start liegt,
+                                # fügen wir danach einen NULL-Punkt ein, um eine falsche Verbindung 
+                                # in den Chart-Bereich zu verhindern (Gap).
                                 real_ts = record.get_time().isoformat()
                                 points.append(DataPoint(ts=real_ts, value=num_val, state=state))
                                 logger.debug(f"INFLUX_SERVICE: Added last known REAL point for numeric entity {eid}: {val} at {real_ts}")
+                                
+                                try:
+                                    ts_to_parse = real_ts.replace('Z', '+00:00')
+                                    dt_last = datetime.fromisoformat(ts_to_parse)
+                                    
+                                    # Wenn wir einen Start-RFC haben, vergleichen wir damit
+                                    if "T" in start_rfc:
+                                        dt_start = datetime.fromisoformat(start_rfc.replace('Z', '+00:00'))
+                                        if (dt_start - dt_last).total_seconds() > 1800: # > 30 Min Lücke
+                                            # Wir fügen einen Punkt mit None 1ms nach dem letzten echten Punkt ein
+                                            dt_gap = dt_last + timedelta(milliseconds=1)
+                                            gap_ts = dt_gap.isoformat().replace('+00:00', 'Z')
+                                            points.append(DataPoint(ts=gap_ts, value=None, state="gap"))
+                                            logger.debug(f"INFLUX_SERVICE: Added NULL-GAP after pre-range point for {eid}")
+                                except Exception as e:
+                                    logger.error(f"INFLUX_SERVICE: Error calculating gap after pre-range point: {e}")
             except Exception as e:
                 logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
 
@@ -753,6 +769,27 @@ class InfluxService:
                             else:
                                 num_val = 0.0
                         
+                        # --- NEU: Gap-Erkennung (Lücken im Messverlauf) ---
+                        # Wenn wir numerische Daten haben und die Lücke zum vorherigen Punkt > 30 Min ist,
+                        # fügen wir einen Null-Punkt (Gap) ein, damit ECharts keine falsche Linie zieht.
+                        if data_kind == "numeric" and points:
+                            try:
+                                last_ts_str = points[-1].ts.replace('Z', '+00:00')
+                                current_ts_str = ts.replace('Z', '+00:00')
+                                dt_prev = datetime.fromisoformat(last_ts_str)
+                                dt_curr = datetime.fromisoformat(current_ts_str)
+                                
+                                if (dt_curr - dt_prev).total_seconds() > 1800: # > 30 Min
+                                    # Wir fügen den Gap-Punkt 1ms nach dem letzten Punkt ein
+                                    dt_gap = dt_prev + timedelta(milliseconds=1)
+                                    gap_ts = dt_gap.isoformat().replace('+00:00', 'Z')
+                                    # Nur wenn wir nicht schon einen Gap haben
+                                    if points[-1].value is not None:
+                                        points.append(DataPoint(ts=gap_ts, value=None, state="gap"))
+                                        logger.debug(f"INFLUX_SERVICE: Inserted GAP between points for {eid}")
+                            except Exception as e:
+                                logger.error(f"INFLUX_SERVICE: Gap detection error for {eid}: {e}")
+
                         points.append(DataPoint(ts=ts, value=num_val, state=state))
             except Exception as e:
                 logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")

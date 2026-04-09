@@ -299,6 +299,10 @@ const DeviceDetailPage: React.FC = () => {
     yAxis: { 
       type: 'value', 
       scale: true, 
+      min: (value: any) => {
+        // Sicherstellen dass 0 immer Teil der Achse ist oder zumindest nah dran
+        return value.min > 0 ? 0 : value.min;
+      },
       name: unitLabel || undefined, 
       nameTextStyle: { color: '#94a3b8', fontSize: 10 },
       axisLabel: { color: '#94a3b8', fontSize: 10 },
@@ -336,6 +340,12 @@ const DeviceDetailPage: React.FC = () => {
             { offset: 0, color: `${color}25` },
             { offset: 1, color: `${color}00` }
           ])
+        },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          label: { show: false },
+          data: [{ yAxis: 0, lineStyle: { color: '#e2e8f0', type: 'dashed', width: 1 } }]
         },
         data: seriesData
       };
