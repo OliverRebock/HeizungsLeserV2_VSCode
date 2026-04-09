@@ -666,22 +666,39 @@ class InfluxService:
             unit_of_measurement = None
 
             # 1. Letzten bekannten Wert vor dem Zeitraum holen
+            # WICHTIG: Für NUMERISCHE Entitäten setzen wir den künstlichen Startpunkt NICHT 
+            # auf den exakten Range-Beginn, um Artefakte/Ausschläge zu vermeiden, wenn der 
+            # Punkt zeitlich weit weg liegt. Stattdessen fügen wir ihn nur ein, wenn wir 
+            # wirklich wissen, dass der Wert bis zum Start konstant blieb.
+            # Für Binär/Enum bleibt es bei der bisherigen Logik für die State-History.
+            data_kind = self._get_data_kind(domain, eid)
+            
             try:
                 last_tables = query_api.query(query=last_query)
                 for table in last_tables:
                     for record in table.records:
-                        # Wir setzen diesen Punkt auf GENAU den Startzeitpunkt
-                        # falls wir den Startzeitpunkt als ISO-String haben
-                        fake_ts = start_rfc if "T" in start_rfc else datetime.now().isoformat()
-                        
                         val = record.values.get("value")
                         if val is None: val = record.values.get("state")
                         
                         if val is not None:
                             num_val = float(val) if isinstance(val, (int, float, bool)) else 0.0
                             state = str(val)
-                            points.append(DataPoint(ts=fake_ts, value=num_val, state=state))
-                            logger.debug(f"INFLUX_SERVICE: Found last value BEFORE start for {eid}: {val}")
+                            
+                            # Logik-Entscheidung:
+                            if data_kind in ("binary", "enum", "string"):
+                                # Für State-History (Binär/Enum) ist der Startpunkt ESSENZIELL
+                                fake_ts = start_rfc if "T" in start_rfc else datetime.now().isoformat()
+                                points.append(DataPoint(ts=fake_ts, value=num_val, state=state))
+                                logger.debug(f"INFLUX_SERVICE: Added START-PADDING for {data_kind} entity {eid}: {val}")
+                            else:
+                                # Für NUMERISCHE Werte (Temperaturen etc.): 
+                                # Wir fügen den Punkt mit seinem ECHTEN Zeitstempel ein, 
+                                # NICHT künstlich am Range-Beginn. Das verhindert die "Geister-Linie" 
+                                # vom Start des Graphen zum ersten echten Punkt, wenn der letzte 
+                                # Punkt eigentlich Stunden her ist.
+                                real_ts = record.get_time().isoformat()
+                                points.append(DataPoint(ts=real_ts, value=num_val, state=state))
+                                logger.debug(f"INFLUX_SERVICE: Added last known REAL point for numeric entity {eid}: {val} at {real_ts}")
             except Exception as e:
                 logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
 

@@ -314,8 +314,8 @@ const DeviceDetailPage: React.FC = () => {
       const color = getSeriesColor(idx);
       
       // Einheitlicher numerischer Stil auf Benutzerwunsch:
-      // Glatte, gefÃ¼llte FlÃ¤chenlinie (wie bei der AuÃŸentemperatur),
-      // OHNE Stufen ('step') und OHNE Carry-Forward bis zum Rand.
+      // Ehrliche Darstellung ohne künstliche Glättung (smooth: false), 
+      // um Artefakte/Verfälschungen am Rand zu vermeiden.
       return {
         id: s.entity_id,
         name: s.friendly_name,
@@ -323,17 +323,17 @@ const DeviceDetailPage: React.FC = () => {
         showSymbol: false, 
         symbolSize: 4,
         step: false, // Keine Stufen mehr fÃ¼r numerische Werte
-        smooth: true, // Glatte Linien wie gewünscht
+        smooth: false, // DEAKTIVIERT: Ehrliche Rohdatenkurve statt künstlicher Artefakte
         connectNulls: false, // LÃ¼cken lassen, wenn keine Daten vorliegen
         lineStyle: { 
-          width: 3, 
+          width: 2.5, // Etwas feiner für ehrliche Darstellung
           color: color,
           opacity: 1
         },
         itemStyle: { color: color },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: `${color}30` },
+            { offset: 0, color: `${color}25` },
             { offset: 1, color: `${color}00` }
           ])
         },
