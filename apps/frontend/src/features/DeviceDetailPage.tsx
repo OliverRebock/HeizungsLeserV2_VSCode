@@ -250,27 +250,25 @@ const DeviceDetailPage: React.FC = () => {
       tooltip: { 
         trigger: 'axis', 
         axisPointer: { 
-          type: 'cross',
-          label: {
-            backgroundColor: '#6a7985'
-          }
+          type: 'line', // Ruhige vertikale Linie statt Crosshair
+          lineStyle: { color: '#cbd5e1', width: 1 }
         },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
+        padding: [8, 12],
         textStyle: { color: '#1e293b', fontSize: 12 },
-        extraCssText: 'shadow-sm rounded-lg border border-slate-200 p-2',
+        extraCssText: 'shadow-md rounded-lg border border-slate-200',
         formatter: (params: any) => {
           if (!params || params.length === 0) return '';
-          let res = `<div class="font-bold text-slate-800 mb-1 border-b pb-1 border-slate-100">${params[0].axisValueLabel}</div>`;
+          let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${params[0].axisValueLabel}</div>`;
           params.forEach((p: any) => {
-            // Find serie by ID to be robust
             const s = seriesList.find(item => item.friendly_name === p.seriesName || item.entity_id === p.seriesId);
             const unit = s?.meta?.unit_of_measurement || unitLabel || '';
             const val = typeof p.data[1] === 'number' ? p.data[1].toLocaleString('de-DE', { maximumFractionDigits: 1 }) : p.data[1];
-            res += `<div class="flex items-center justify-between gap-4 py-0.5">
+            res += `<div class="flex items-center justify-between gap-6 py-0.5">
                       <div class="flex items-center gap-2">
-                        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:${p.color};"></span>
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${p.color};"></span>
                         <span class="text-slate-600 font-medium">${p.seriesName}</span>
                       </div>
                       <span class="font-bold text-slate-900">${val} ${unit}</span>
@@ -281,12 +279,12 @@ const DeviceDetailPage: React.FC = () => {
       },
       grid: { left: '3%', right: '3%', bottom: 30, top: 40, containLabel: true },
       legend: {
-        show: true,
+        show: seriesList.length > 1, // Legend nur bei mehreren Serien zeigen (wie HA)
         top: 0,
-        icon: 'circle',
+        icon: 'roundRect',
         textStyle: { color: '#64748b', fontSize: 11 },
-        itemWidth: 10,
-        itemHeight: 10
+        itemWidth: 12,
+        itemHeight: 4
       },
       xAxis: { 
         type: 'time', 
@@ -296,21 +294,14 @@ const DeviceDetailPage: React.FC = () => {
         axisLabel: { 
           color: '#94a3b8', 
           fontSize: 10,
-          formatter: (value: number) => {
-            const date = new Date(value);
-            return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-          }
+          hideOverlap: true
         },
-        axisLine: { lineStyle: { color: '#f1f5f9' } },
-        splitLine: { show: true, lineStyle: { color: '#f8fafc' } },
+        axisLine: { show: false },
+        splitLine: { show: false } // Weniger technische Linien
       },
       yAxis: { 
         type: 'value', 
-        scale: true, 
-        min: (value: any) => {
-          // Sicherstellen dass 0 immer Teil der Achse ist oder zumindest nah dran
-          return value.min > 0 ? 0 : value.min;
-        },
+        scale: true, // Natürliche Skalierung ohne erzwungene 0
         name: unitLabel || undefined, 
         nameTextStyle: { color: '#94a3b8', fontSize: 10 },
         axisLabel: { color: '#94a3b8', fontSize: 10 },
@@ -318,42 +309,31 @@ const DeviceDetailPage: React.FC = () => {
         splitLine: { lineStyle: { color: '#f1f5f9' } }
       },
       series: seriesList.map((s, idx) => {
-        // Sort points by timestamp to ensure correct line drawing
         const sortedPoints = [...s.points].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
         const seriesData = sortedPoints.map(p => [new Date(p.ts).getTime(), p.value ?? null]);
-        console.log(`Series ${s.friendly_name} (${s.entity_id}) data points:`, seriesData.length);
 
         const color = getSeriesColor(idx);
         
-        // Einheitlicher numerischer Stil auf Benutzerwunsch:
-        // Ehrliche Darstellung ohne künstliche Glättung (smooth: false), 
-        // um Artefakte/Verfälschungen am Rand zu vermeiden.
         return {
           id: s.entity_id,
           name: s.friendly_name,
           type: 'line',
           showSymbol: false, 
-          symbolSize: 4,
-          step: false, // Keine Stufen mehr fÃ¼r numerische Werte
-          smooth: false, // DEAKTIVIERT: Ehrliche Rohdatenkurve statt künstlicher Artefakte
-          connectNulls: false, // LÃ¼cken lassen, wenn keine Daten vorliegen
+          step: false, 
+          smooth: false, 
+          connectNulls: false, 
           lineStyle: { 
-            width: 2.5, // Etwas feiner für ehrliche Darstellung
+            width: 2, 
             color: color,
             opacity: 1
           },
           itemStyle: { color: color },
           areaStyle: {
+            opacity: 0.1, // Sehr dezent wie HA
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: `${color}25` },
-              { offset: 1, color: `${color}00` }
+              { offset: 0, color: color },
+              { offset: 1, color: 'transparent' }
             ])
-          },
-          markLine: {
-            silent: true,
-            symbol: 'none',
-            label: { show: false },
-            data: [{ yAxis: 0, lineStyle: { color: '#e2e8f0', type: 'dashed', width: 1 } }]
           },
           data: seriesData
         };
