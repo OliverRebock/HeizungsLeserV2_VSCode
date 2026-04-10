@@ -374,13 +374,7 @@ const DeviceDetailPage: React.FC = () => {
             data: [
               { 
                 yAxis: 0,
-                name: 'Null-Referenz', // Name für den Tooltip
-                // Wir erzwingen, dass die Linie IMMER von minTime bis maxTime geht
-                // indem wir Start- und Endpunkte explizit setzen (auch wenn keine Daten da sind)
-                coord: [minTime, 0],
-              },
-              {
-                coord: [maxTime, 0]
+                name: 'Null-Referenz'
               }
             ]
           } : undefined,
