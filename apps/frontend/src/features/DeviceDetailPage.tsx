@@ -361,6 +361,7 @@ const DeviceDetailPage: React.FC = () => {
           // Wir verwenden s.value_semantics, um zu entscheiden, ob eine markLine gezeichnet wird.
           markLine: (s.value_semantics === 'instant') ? {
             silent: false, // Interaktion erlauben für Mouseover
+            triggerEvent: true, // Erlaubt Tooltip-Updates über die Achse
             symbol: ['none', 'none'],
             label: { show: false },
             lineStyle: { 
