@@ -375,9 +375,12 @@ const DeviceDetailPage: React.FC = () => {
               { 
                 yAxis: 0,
                 name: 'Null-Referenz', // Name für den Tooltip
-                // Wir erzwingen den Start und Ende der Linie über die gesamte Breite
-                // indem wir x: '0%' und x: '100%' oder ähnliches nutzen?
-                // Nein, yAxis: 0 in ECharts zieht eine horizontale Linie über den gesamten Grid-Bereich.
+                // Wir erzwingen, dass die Linie IMMER von minTime bis maxTime geht
+                // indem wir Start- und Endpunkte explizit setzen (auch wenn keine Daten da sind)
+                coord: [minTime, 0],
+              },
+              {
+                coord: [maxTime, 0]
               }
             ]
           } : undefined,
