@@ -294,14 +294,18 @@ const DeviceDetailPage: React.FC = () => {
         axisLabel: { 
           color: '#94a3b8', 
           fontSize: 10,
-          hideOverlap: true
+          hideOverlap: true,
+          formatter: (value: number) => {
+            const date = new Date(value);
+            return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          }
         },
         axisLine: { show: false },
         splitLine: { show: false } // Weniger technische Linien
       },
       yAxis: { 
         type: 'value', 
-        scale: true, // Natürliche Skalierung ohne erzwungene 0
+        scale: true, // Natürliche Skalierung (Auto-Scaling wie HA)
         name: unitLabel || undefined, 
         nameTextStyle: { color: '#94a3b8', fontSize: 10 },
         axisLabel: { color: '#94a3b8', fontSize: 10 },
@@ -335,6 +339,21 @@ const DeviceDetailPage: React.FC = () => {
               { offset: 1, color: 'transparent' }
             ])
           },
+          // Durchgehende Nulllinie für Leistungswerte (Leistung, Strom etc.)
+          // Wir verwenden s.value_semantics, um zu entscheiden, ob eine markLine gezeichnet wird.
+          markLine: (s.value_semantics === 'instant') ? {
+            silent: true,
+            symbol: ['none', 'none'],
+            label: { show: false },
+            lineStyle: { 
+              color: '#94a3b8', 
+              type: 'solid', 
+              width: 1, 
+              opacity: 0.3,
+              z: 1 // Hinter die Datenlinie legen
+            },
+            data: [{ yAxis: 0 }]
+          } : undefined,
           data: seriesData
         };
       })

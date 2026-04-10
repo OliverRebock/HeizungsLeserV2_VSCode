@@ -431,6 +431,12 @@ class InfluxService:
         
         for eid in entity_ids:
             try:
+                # 0. Determine data kind and aggregation strategy
+                domain = eid.split('.')[0] if '.' in eid else "sensor"
+                data_kind = self._get_data_kind(domain, eid)
+                # Use mean for numeric, but last/max for others to avoid InfluxDB errors with strings
+                agg_fn = "mean" if data_kind == "numeric" else "last"
+
                 # 1. Get the last point EVER for this entity (latest point)
                 last_query = f'''
                     from(bucket: "{bucket}")
@@ -465,25 +471,43 @@ class InfluxService:
                 # 2. Get aggregated sparkline (last 24h, 48 points/buckets)
                 # We use 30m windows for 24h = 48 points
                 # For sparkline we only care about numeric value
-                sparkline_query = f'''
-                    from(bucket: "{bucket}")
-                    |> range(start: -24h)
-                    |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
-                    |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
-                    |> aggregateWindow(every: 30m, fn: mean, createEmpty: false)
-                    |> keep(columns: ["_time", "_value"])
-                '''
-                
                 sparkline_points = []
-                spark_tables = query_api.query(query=sparkline_query)
-                for table in spark_tables:
-                    for record in table.records:
-                        sparkline_points.append(DashboardDataPoint(
-                            ts=record.get_time().isoformat(),
-                            value=float(record.get_value()) if record.get_value() is not None else 0.0,
-                            state="",
-                            is_actual=False
-                        ))
+                try:
+                    # To avoid schema collision (float vs string), we process fields separately or cast
+                    # For sparklines, we prefer the "value" field.
+                    sparkline_query = f'''
+                        from(bucket: "{bucket}")
+                        |> range(start: -24h)
+                        |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                        |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
+                        |> map(fn: (r) => ({{ r with _value: float(v: r._value) }}))
+                        |> aggregateWindow(every: 30m, fn: {agg_fn}, createEmpty: false)
+                        |> keep(columns: ["_time", "_value"])
+                    '''
+                    
+                    spark_tables = query_api.query(query=sparkline_query)
+                    for table in spark_tables:
+                        for record in table.records:
+                            rec_val = record.get_value()
+                            num_rec_val = 0.0
+                            if isinstance(rec_val, (int, float)):
+                                num_rec_val = float(rec_val)
+                            elif isinstance(rec_val, bool):
+                                num_rec_val = 1.0 if rec_val else 0.0
+                            elif isinstance(rec_val, str):
+                                low_rec = rec_val.lower()
+                                if low_rec in ['on', 'true', 'active', 'heating', 'an']: num_rec_val = 1.0
+                                elif low_rec in ['off', 'false', 'idle', 'inactive', 'aus']: num_rec_val = 0.0
+                                
+                            sparkline_points.append(DashboardDataPoint(
+                                ts=record.get_time().isoformat(),
+                                value=num_rec_val,
+                                state="",
+                                is_actual=False
+                            ))
+                except Exception as spark_err:
+                    logger.warning(f"Could not fetch sparkline for {eid}: {spark_err}")
+                    # Keep empty list, but don't fail the whole entity
 
                 # 3. Get friendly name if possible
                 fn_query = f'''
@@ -864,9 +888,11 @@ class InfluxService:
                                     drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
                                     points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
                                     
-                                    carry_value = 0.0
-                                    carry_state = f"0.0 (Timeout: {int(diff_seconds/60)}m alt)"
-                                    logger.info(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), adding drop-point and falling to 0 at end.")
+                                    # Wir setzen den Wert auf None (Gap), statt auf 0.0
+                                    # Die visuelle Null-Referenz kommt nun aus dem Frontend (markLine)
+                                    carry_value = None
+                                    carry_state = f"Gap (Timeout: {int(diff_seconds/60)}m alt)"
+                                    logger.info(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), adding gap (None) at end.")
                             else:
                                 # Wir sind in einer historischen Ansicht (z.B. GESTERN).
                                 # Hier fallen wir AUCH auf 0 am Ende des Zeitraums, wenn der letzte Punkt 
@@ -878,9 +904,10 @@ class InfluxService:
                                     drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
                                     points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
                                     
-                                    carry_value = 0.0
-                                    carry_state = "0.0 (Historical Timeout)"
-                                    logger.debug(f"INFLUX_SERVICE: Historical timeout for {eid} at {final_end_ts}")
+                                    # Auch hier: Gap statt künstlicher 0
+                                    carry_value = None
+                                    carry_state = "Gap (Historical Timeout)"
+                                    logger.debug(f"INFLUX_SERVICE: Historical timeout for {eid} at {final_end_ts} -> Gap")
                                     
                         except Exception as e:
                             logger.error(f"INFLUX_SERVICE: Error calculating timeout for {eid}: {e}")
