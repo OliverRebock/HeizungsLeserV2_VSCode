@@ -214,7 +214,7 @@ class InfluxService:
         lower_unit = unit.lower() if unit else ""
         
         # Instant/Output keywords (typically power, power output, watt, etc.)
-        instant_keywords = ["power", "leistung", "current_flow", "verbrauch", "output", "active_power", "apparent_power", "current", "speed", "drehzahl"]
+        instant_keywords = ["power", "leistung", "current_flow", "verbrauch", "output", "active_power", "apparent_power", "current", "speed", "drehzahl", "flow_pc"]
         instant_units = ["w", "kw", "va", "var", "hz", "a", "%", "rpm"] # Watt, Kilowatt, Volt-Ampere, Hertz, Ampere, Prozent (für Speed), RPM
         
         # Stateful keywords (typically temperatures, pressure, setpoints, battery levels)
