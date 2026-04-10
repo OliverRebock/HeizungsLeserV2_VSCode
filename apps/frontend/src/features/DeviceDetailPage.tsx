@@ -261,19 +261,37 @@ const DeviceDetailPage: React.FC = () => {
         extraCssText: 'shadow-md rounded-lg border border-slate-200',
         formatter: (params: any) => {
           if (!params || params.length === 0) return '';
+          
+          // Wir filtern MarkLines heraus, da wir sie separat behandeln oder
+          // nur die echten Datenpunkte in der Liste zeigen wollen.
+          const dataParams = params.filter((p: any) => p.componentType === 'series');
+          
           let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${params[0].axisValueLabel}</div>`;
-          params.forEach((p: any) => {
+          
+          dataParams.forEach((p: any) => {
             const s = seriesList.find(item => item.friendly_name === p.seriesName || item.entity_id === p.seriesId);
             const unit = s?.meta?.unit_of_measurement || unitLabel || '';
-            const val = typeof p.data[1] === 'number' ? p.data[1].toLocaleString('de-DE', { maximumFractionDigits: 1 }) : p.data[1];
+            const isNull = p.data[1] === null;
+            const val = typeof p.data[1] === 'number' ? p.data[1].toLocaleString('de-DE', { maximumFractionDigits: 1 }) : (isNull ? '<span class="text-slate-400 italic">Keine Daten</span>' : p.data[1]);
             res += `<div class="flex items-center justify-between gap-6 py-0.5">
                       <div class="flex items-center gap-2">
                         <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${p.color};"></span>
                         <span class="text-slate-600 font-medium">${p.seriesName}</span>
                       </div>
-                      <span class="font-bold text-slate-900">${val} ${unit}</span>
+                      <span class="font-bold text-slate-900">${val}${!isNull ? ' ' + unit : ''}</span>
                     </div>`;
           });
+
+          // Falls eine MarkLine (Null-Referenz) im Hover-Bereich ist, 
+          // zeigen wir einen Hinweis darauf an.
+          const hasMarkLine = params.some((p: any) => p.componentType === 'markLine');
+          if (hasMarkLine) {
+            res += `<div class="mt-2 pt-1 border-t border-slate-100 flex items-center gap-2">
+                      <div style="width:12px; height:0; border-top: 1px dashed #64748b;"></div>
+                      <span class="text-[10px] text-slate-400 font-medium italic">Null-Referenz</span>
+                    </div>`;
+          }
+          
           return res;
         }
       },
@@ -342,7 +360,7 @@ const DeviceDetailPage: React.FC = () => {
           // Durchgehende Nulllinie für Leistungswerte (Leistung, Strom etc.)
           // Wir verwenden s.value_semantics, um zu entscheiden, ob eine markLine gezeichnet wird.
           markLine: (s.value_semantics === 'instant') ? {
-            silent: true,
+            silent: false, // Interaktion erlauben für Mouseover
             symbol: ['none', 'none'],
             label: { show: false },
             lineStyle: { 
@@ -355,6 +373,7 @@ const DeviceDetailPage: React.FC = () => {
             data: [
               { 
                 yAxis: 0,
+                name: 'Null-Referenz', // Name für den Tooltip
                 // Wir erzwingen den Start und Ende der Linie über die gesamte Breite
                 // indem wir x: '0%' und x: '100%' oder ähnliches nutzen?
                 // Nein, yAxis: 0 in ECharts zieht eine horizontale Linie über den gesamten Grid-Bereich.
