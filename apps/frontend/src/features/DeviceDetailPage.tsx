@@ -346,10 +346,10 @@ const DeviceDetailPage: React.FC = () => {
             symbol: ['none', 'none'],
             label: { show: false },
             lineStyle: { 
-              color: '#94a3b8', 
-              type: 'solid', 
-              width: 1.5, 
-              opacity: 0.5,
+              color: '#64748b', // Kräftigeres Slate für bessere Sichtbarkeit (wie HA-Referenz)
+              type: 'dashed',  // Gestrichelt zur klaren Unterscheidung von Grid/Achse
+              width: 1, 
+              opacity: 0.6,    // Sichtbarer als 0.5, aber immer noch dezent
               z: 1 // Hinter die Datenlinie legen
             },
             data: [
