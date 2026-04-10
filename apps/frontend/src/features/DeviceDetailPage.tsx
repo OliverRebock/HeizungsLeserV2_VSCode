@@ -348,11 +348,18 @@ const DeviceDetailPage: React.FC = () => {
             lineStyle: { 
               color: '#94a3b8', 
               type: 'solid', 
-              width: 1, 
-              opacity: 0.3,
+              width: 1.5, 
+              opacity: 0.5,
               z: 1 // Hinter die Datenlinie legen
             },
-            data: [{ yAxis: 0 }]
+            data: [
+              { 
+                yAxis: 0,
+                // Wir erzwingen den Start und Ende der Linie über die gesamte Breite
+                // indem wir x: '0%' und x: '100%' oder ähnliches nutzen?
+                // Nein, yAxis: 0 in ECharts zieht eine horizontale Linie über den gesamten Grid-Bereich.
+              }
+            ]
           } : undefined,
           data: seriesData
         };

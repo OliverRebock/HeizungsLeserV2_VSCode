@@ -875,38 +875,36 @@ class InfluxService:
                                 dt_last = dt_last.replace(tzinfo=dt_timezone.utc)
                             
                             # Wenn wir uns am aktuellen Rand befinden (HEUTE / JETZT):
-                            # Wenn der letzte Punkt älter als 15 Minuten ist, fallen wir am Rand auf 0
+                            # Wenn der letzte Punkt älter als 15 Minuten ist, fallen wir am Rand auf None (Gap)
                             if is_near_now:
                                 # Wir prüfen gegen den absoluten JETZT Zeitpunkt, nicht gegen das Graph-Ende,
                                 # um Geisterlinien am aktuellen Rand zu vermeiden.
                                 diff_seconds = (now_utc - dt_last).total_seconds()
                                 if diff_seconds > 900: # 15 * 60
-                                    # NEU: Wir fügen ZWEI Punkte ein, um eine saubere Kante zu zeichnen
-                                    # 1. Einen Punkt direkt beim letzten echten Wert + 1ms (damit die Linie dort endet)
-                                    # 2. Einen Punkt am rechten Rand mit 0.0
-                                    dt_drop = dt_last + dt_timedelta(milliseconds=1)
+                                    # NEU: Wir fügen einen Punkt direkt beim letzten echten Wert + 1ms ein,
+                                    # gefolgt von einem Gap (None) am rechten Rand.
+                                    # Das sorgt dafür, dass die blaue Linie am letzten echten Messwert abbricht.
+                                    dt_drop = dt_last + timedelta(milliseconds=1)
                                     drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
                                     points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
                                     
                                     # Wir setzen den Wert auf None (Gap), statt auf 0.0
-                                    # Die visuelle Null-Referenz kommt nun aus dem Frontend (markLine)
+                                    # Die visuelle Null-Referenz kommt nun exklusiv aus dem Frontend (markLine)
                                     carry_value = None
-                                    carry_state = f"Gap (Timeout: {int(diff_seconds/60)}m alt)"
+                                    carry_state = f"Keine Daten (Timeout: {int(diff_seconds/60)}m alt)"
                                     logger.info(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), adding gap (None) at end.")
                             else:
                                 # Wir sind in einer historischen Ansicht (z.B. GESTERN).
-                                # Hier fallen wir AUCH auf 0 am Ende des Zeitraums, wenn der letzte Punkt 
-                                # vor dem Ende des Zeitraums lag und wir wissen, dass danach nichts mehr kam.
+                                # Auch hier: Wenn zwischen dem letzten Punkt und dem Zeitraum-Ende > 15 Min liegen,
+                                # lassen wir den Wert auf None (Gap) fallen.
                                 diff_to_end = (dt_end - dt_last).total_seconds()
                                 if diff_to_end > 900:
-                                    # Auch hier: Erst halten, dann fallen
-                                    dt_drop = dt_last + dt_timedelta(milliseconds=1)
+                                    dt_drop = dt_last + timedelta(milliseconds=1)
                                     drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
                                     points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
                                     
-                                    # Auch hier: Gap statt künstlicher 0
                                     carry_value = None
-                                    carry_state = "Gap (Historical Timeout)"
+                                    carry_state = "Keine Daten (Historisches Timeout)"
                                     logger.debug(f"INFLUX_SERVICE: Historical timeout for {eid} at {final_end_ts} -> Gap")
                                     
                         except Exception as e:
