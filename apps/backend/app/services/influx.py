@@ -229,7 +229,7 @@ class InfluxService:
         ]
         
         # Stateful keywords (typically temperatures, pressure, setpoints, battery levels)
-        stateful_keywords = ["temp", "druck", "pressure", "battery", "soc", "level", "setpoint", "target", "humidity", "feuchtigkeit"]
+        stateful_keywords = ["temp", "grad", "grad_c", "druck", "pressure", "battery", "soc", "level", "setpoint", "target", "humidity", "feuchtigkeit"]
         stateful_units = ["°c", "c", "bar", "psi"]
         
         if any(kw in lower_eid for kw in instant_keywords) or lower_unit in instant_units:
