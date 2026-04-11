@@ -262,12 +262,18 @@ class InfluxService:
         # Enum/Text detection for selects and status sensors
         enum_triggers = [
             "select", "status", "mode", "phase", "art", 
-            "state", "condition", "type", "step", "level",
+            "state", "condition", "type", "step",
             "error", "fault", "warning", "alarm", "code"
         ]
         
+        # Counter/Numeric triggers (Force these to be numeric even if they match enum triggers)
+        numeric_triggers = ["starts", "total", "count", "counter", "duration", "runtime", "level"]
+        
         if domain in ["select", "input_select", "device_tracker", "person", "update"]:
             return "enum"
+            
+        if any(nt in lower_eid for nt in numeric_triggers):
+            return "numeric"
             
         if any(trigger in lower_eid for trigger in enum_triggers):
             return "enum"

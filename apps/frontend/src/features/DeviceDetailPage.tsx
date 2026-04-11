@@ -266,9 +266,22 @@ const DeviceDetailPage: React.FC = () => {
           // nur die echten Datenpunkte in der Liste zeigen wollen.
           const dataParams = params.filter((p: any) => p.componentType === 'series');
           
-          let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${params[0].axisValueLabel}</div>`;
+          // Deduplizieren: Wir filtern Einträge derselben Serie mit identischem Wert heraus
+          // Das behebt Dopplungen im Tooltip bei eng beieinander liegenden Datenpunkten.
+          const uniqueParams: any[] = [];
+          const seenSeriesVal = new Set();
           
           dataParams.forEach((p: any) => {
+            const seriesKey = `${p.seriesId || p.seriesName}-${p.data[1]}`;
+            if (!seenSeriesVal.has(seriesKey)) {
+              seenSeriesVal.add(seriesKey);
+              uniqueParams.push(p);
+            }
+          });
+          
+          let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${params[0].axisValueLabel}</div>`;
+          
+          uniqueParams.forEach((p: any) => {
             const s = seriesList.find(item => item.friendly_name === p.seriesName || item.entity_id === p.seriesId);
             const unit = s?.meta?.unit_of_measurement || unitLabel || '';
             const isNull = p.data[1] === null;
@@ -336,14 +349,19 @@ const DeviceDetailPage: React.FC = () => {
 
         const color = getSeriesColor(idx);
         
+        // Counter-Erkennung für Step-Line Darstellung
+        const isCounter = s.entity_id.toLowerCase().includes('starts') || 
+                         s.entity_id.toLowerCase().includes('total') || 
+                         s.entity_id.toLowerCase().includes('count');
+        
         return {
           id: s.entity_id,
           name: s.friendly_name,
           type: 'line',
           showSymbol: false, 
-          step: false, 
-          smooth: false, 
-          connectNulls: false, 
+          step: isCounter ? 'end' : false, 
+          smooth: !isCounter, 
+          connectNulls: false,
           lineStyle: { 
             width: 2, 
             color: color,
