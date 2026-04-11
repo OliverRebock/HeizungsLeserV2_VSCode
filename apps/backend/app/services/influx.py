@@ -821,9 +821,21 @@ class InfluxService:
                                 dt_prev = datetime.fromisoformat(last_ts_str)
                                 dt_curr = datetime.fromisoformat(current_ts_str)
                                 
+                                # --- NEU: Padding für Counter-Werte für HA-Style Treppen (Step-Lines) ---
+                                # Für Counter (starts, total, count) fügen wir vor JEDEM neuen Punkt einen
+                                # Zwischenschritt ein (alter Wert bis 1ms vor neuem Zeitstempel),
+                                # damit ECharts IMMER eine saubere Treppe statt einer schrägen Linie zeichnet.
+                                if is_counter and points[-1].value is not None:
+                                    dt_step = dt_curr - timedelta(milliseconds=1)
+                                    step_ts = dt_step.isoformat().replace('+00:00', 'Z')
+                                    points.append(DataPoint(ts=step_ts, value=points[-1].value, state=points[-1].state))
+                                    logger.debug(f"INFLUX_SERVICE: Added Step-Padding for Counter {eid} at {step_ts}")
+                                else:
+                                    dt_step = dt_prev
+
                                 if (dt_curr - dt_prev).total_seconds() > 1800: # > 30 Min
-                                    # Wir fügen den Gap-Punkt 1ms nach dem letzten Punkt ein
-                                    dt_gap = dt_prev + timedelta(milliseconds=1)
+                                    # Wir fügen den Gap-Punkt 1ms nach dem letzten Punkt ein (oder nach dem Step-Padding)
+                                    dt_gap = dt_step + timedelta(milliseconds=1)
                                     gap_ts = dt_gap.isoformat().replace('+00:00', 'Z')
                                     # Nur wenn wir nicht schon einen Gap haben
                                     if points[-1].value is not None:
