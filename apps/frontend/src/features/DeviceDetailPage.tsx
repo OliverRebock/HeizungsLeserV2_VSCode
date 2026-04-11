@@ -359,7 +359,10 @@ const DeviceDetailPage: React.FC = () => {
         // Counter-Erkennung für Step-Line Darstellung
         const isCounter = s.entity_id.toLowerCase().includes('starts') || 
                          s.entity_id.toLowerCase().includes('total') || 
-                         s.entity_id.toLowerCase().includes('count');
+                         s.entity_id.toLowerCase().includes('count') ||
+                         s.entity_id.toLowerCase().includes('counter') ||
+                         s.entity_id.toLowerCase().includes('zähler') ||
+                         s.entity_id.toLowerCase().includes('zaehler');
         
         return {
           id: s.entity_id,
@@ -370,7 +373,7 @@ const DeviceDetailPage: React.FC = () => {
           smooth: false, // Keine künstliche Glättung für ehrliche HA-Optik
           connectNulls: false,
           lineStyle: { 
-            width: 1.5, // Etwas feiner wie HA
+            width: isCounter ? 2 : 1.5, // Kräftigere Linie für Counter wie HA
             color: color,
             opacity: 1
           },

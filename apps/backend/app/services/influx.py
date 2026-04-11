@@ -267,7 +267,7 @@ class InfluxService:
         ]
         
         # Counter/Numeric triggers (Force these to be numeric even if they match enum triggers)
-        numeric_triggers = ["starts", "total", "count", "counter", "duration", "runtime", "level"]
+        numeric_triggers = ["starts", "total", "count", "counter", "duration", "runtime", "level", "zähler", "zaehler"]
         
         if domain in ["select", "input_select", "device_tracker", "person", "update"]:
             return "enum"
