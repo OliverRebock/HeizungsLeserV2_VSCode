@@ -729,8 +729,10 @@ class InfluxService:
             # auf den exakten Range-Beginn, um Artefakte/Ausschläge zu vermeiden, wenn der 
             # Punkt zeitlich weit weg liegt. Stattdessen fügen wir ihn nur ein, wenn wir 
             # wirklich wissen, dass der Wert bis zum Start konstant blieb.
-            # Für Binär/Enum bleibt es bei der bisherigen Logik für die State-History.
+            # EXZEPTION: Für Counter/Zähler (starts, total, count) übernehmen wir den letzten 
+            # bekannten Wert als Startpunkt am linken Rand, um eine HA-nahe Step-Line zu ermöglichen.
             data_kind = self._get_data_kind(domain, eid)
+            is_counter = any(kw in eid.lower() for kw in ["starts", "total", "count", "counter"])
             
             try:
                 last_tables = query_api.query(query=last_query)
@@ -744,13 +746,13 @@ class InfluxService:
                             state = str(val)
                             
                             # Logik-Entscheidung:
-                            if data_kind in ("binary", "enum", "string"):
-                                # Für State-History (Binär/Enum) ist der Startpunkt ESSENZIELL
+                            if data_kind in ("binary", "enum", "string") or is_counter:
+                                # Für State-History (Binär/Enum) UND COUNTER ist der Startpunkt ESSENZIELL
                                 fake_ts = start_rfc if "T" in start_rfc else datetime.now().isoformat()
                                 points.append(DataPoint(ts=fake_ts, value=num_val, state=state))
-                                logger.debug(f"INFLUX_SERVICE: Added START-PADDING for {data_kind} entity {eid}: {val}")
+                                logger.debug(f"INFLUX_SERVICE: Added START-PADDING for {data_kind} (counter={is_counter}) entity {eid}: {val}")
                             else:
-                                # Für NUMERISCHE Werte (Temperaturen etc.): 
+                                # Für normale NUMERISCHE Werte (Temperaturen etc.): 
                                 # AUF BENUTZERWUNSCH: Wir fügen KEINEN Punkt vor dem Range-Start mehr ein,
                                 # um zu verhindern, dass die X-Achse nach links gedehnt wird.
                                 # Der Punkt wird nur geloggt, aber NICHT in die Serie aufgenommen.

@@ -328,6 +328,13 @@ const DeviceDetailPage: React.FC = () => {
           hideOverlap: true,
           formatter: (value: number) => {
             const date = new Date(value);
+            // Adaptives Format: Wenn der Zeitraum groß ist (Woche/Monat), Datum zeigen
+            const rangeDays = maxTime && minTime ? (maxTime - minTime) / (1000 * 60 * 60 * 24) : 0;
+            
+            if (rangeDays > 2) {
+              return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' + 
+                     date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+            }
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
           }
         },
@@ -360,20 +367,17 @@ const DeviceDetailPage: React.FC = () => {
           type: 'line',
           showSymbol: false, 
           step: isCounter ? 'end' : false, 
-          smooth: !isCounter, 
+          smooth: false, // Keine künstliche Glättung für ehrliche HA-Optik
           connectNulls: false,
           lineStyle: { 
-            width: 2, 
+            width: 1.5, // Etwas feiner wie HA
             color: color,
             opacity: 1
           },
           itemStyle: { color: color },
-          areaStyle: {
-            opacity: 0.1, // Sehr dezent wie HA
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: color },
-              { offset: 1, color: 'transparent' }
-            ])
+          areaStyle: isCounter ? undefined : { // Keine Fläche für Counter
+            opacity: 0.03, // Extrem dezent für normale Reihen
+            color: color
           },
           // Durchgehende Nulllinie für Leistungswerte (Leistung, Strom etc.)
           // Wir verwenden s.value_semantics, um zu entscheiden, ob eine markLine gezeichnet wird.
