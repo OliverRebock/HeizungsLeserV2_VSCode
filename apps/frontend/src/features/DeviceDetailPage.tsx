@@ -418,13 +418,22 @@ const DeviceDetailPage: React.FC = () => {
   };
 
   const binaryOptions = (seriesList: TimeSeries[]) => {
+    // Get range from data to keep X-axis clean and synchronized
+    const range = (chartData?.range_resolved) || (modalChartData?.range_resolved);
+    const minTime = range?.from ? new Date(range.from).getTime() : undefined;
+    const maxTime = range?.to ? new Date(range.to).getTime() : undefined;
+
     // In Home Assistant, state history is shown as horizontal bars.
     // We achieve this by mapping each series to its own row.
     return {
       tooltip: { 
         trigger: 'axis', 
         confine: true,
-        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.1)', width: 1 }, z: 10 },
+        axisPointer: { 
+          type: 'line', 
+          lineStyle: { color: '#cbd5e1', width: 1 }, 
+          z: 10 
+        },
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
@@ -435,30 +444,28 @@ const DeviceDetailPage: React.FC = () => {
           
           // Only show unique series in tooltip to avoid clutter
           const seen = new Set();
-          let res = `<div class="font-bold text-slate-800 mb-2 border-b pb-1 border-slate-100">${params[0].axisValueLabel}</div>`;
+          let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${params[0].axisValueLabel}</div>`;
           
           params.forEach((p: any) => {
             if (seen.has(p.seriesId)) return;
             seen.add(p.seriesId);
             
             // Check if this is the synthetic end point (carry forward)
-            // We can detect this if the point's timestamp matches the series last point
-            // and it's the very last data entry.
             const series = seriesList.find(s => s.entity_id === p.seriesId);
             const isSynthetic = series && series.points.length > 0 && 
                                new Date(series.points[series.points.length - 1].ts).getTime() === p.value[0] &&
                                p.dataIndex === series.points.length - 1;
 
             const val = p.data[1];
-            const isAn = val === 1 || val === (p.seriesIndex + 1);
-            const label = isAn ? 'An' : 'Aus';
+            const isAn = val === 1 || val === (p.seriesIndex + 1) || (typeof val === 'number' && val > (seriesList.length - params.indexOf(p) - 1));
+            const label = val % 1 === 0 ? 'An' : 'Aus'; // Basic heuristic for row-mapped binary values
             
             res += `<div class="flex items-center justify-between gap-6 py-0.5">
                       <div class="flex items-center gap-2">
                         <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${p.color};"></span>
-                        <span class="text-slate-500 font-medium">${p.seriesName}${isSynthetic ? ' <span class="text-[10px] italic opacity-60">(aktuell)</span>' : ''}</span>
+                        <span class="text-slate-600 font-medium">${p.seriesName}${isSynthetic ? ' <span class="text-[10px] italic opacity-60">(aktuell)</span>' : ''}</span>
                       </div>
-                      <span class="font-bold ${isAn ? 'text-blue-600' : 'text-slate-400'}">${label}</span>
+                      <span class="font-bold ${val % 1 === 0 ? 'text-blue-600' : 'text-slate-400'}">${val % 1 === 0 ? 'An' : 'Aus'}</span>
                     </div>`;
           });
           return res;
@@ -474,12 +481,22 @@ const DeviceDetailPage: React.FC = () => {
       xAxis: { 
         type: 'time', 
         boundaryGap: false,
+        min: minTime,
+        max: maxTime,
         axisLabel: { 
           color: '#94a3b8', 
           fontSize: 10,
+          hideOverlap: true,
           formatter: (value: number) => {
             const date = new Date(value);
+            const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
+            if (isMidnight) {
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
+            }
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          },
+          rich: {
+            bold: { fontWeight: 'bold', color: '#475569' }
           }
         },
         axisLine: { show: false },
@@ -539,18 +556,63 @@ const DeviceDetailPage: React.FC = () => {
 
   const enumOptions = (s: TimeSeries) => {
     const cats = Array.from(new Set((s.points.map(p => p.state).filter(Boolean) as string[]).concat((s as any).meta?.options || [])));
+    const range = (chartData?.range_resolved) || (modalChartData?.range_resolved);
+    const minTime = range?.from ? new Date(range.from).getTime() : undefined;
+    const maxTime = range?.to ? new Date(range.to).getTime() : undefined;
+
     return {
       tooltip: { 
         trigger: 'axis', 
         confine: true,
-        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.1)', width: 1 }, z: 10 },
+        axisPointer: { 
+          type: 'line', 
+          lineStyle: { color: '#cbd5e1', width: 1 }, 
+          z: 10 
+        },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
-        textStyle: { color: '#1e293b', fontSize: 12 }
+        padding: [8, 12],
+        textStyle: { color: '#1e293b', fontSize: 12 },
+        extraCssText: 'shadow-md rounded-lg border border-slate-200',
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${params[0].axisValueLabel}</div>`;
+          params.forEach((p: any) => {
+            res += `<div class="flex items-center justify-between gap-6 py-0.5">
+                      <div class="flex items-center gap-2">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${p.color};"></span>
+                        <span class="text-slate-600 font-medium">${p.seriesName}</span>
+                      </div>
+                      <span class="font-bold text-slate-900">${p.data[1]}</span>
+                    </div>`;
+          });
+          return res;
+        }
       },
       grid: { left: '3%', right: '3%', bottom: 30, top: 10, containLabel: true },
-      xAxis: { type: 'time', boundaryGap: false, axisLabel: { color: '#94a3b8', fontSize: 10 } },
+      xAxis: { 
+        type: 'time', 
+        boundaryGap: false, 
+        min: minTime,
+        max: maxTime,
+        axisLabel: { 
+          color: '#94a3b8', 
+          fontSize: 10,
+          hideOverlap: true,
+          formatter: (value: number) => {
+            const date = new Date(value);
+            const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
+            if (isMidnight) {
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
+            }
+            return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          },
+          rich: {
+            bold: { fontWeight: 'bold', color: '#475569' }
+          }
+        } 
+      },
       yAxis: { type: 'category', data: cats, axisLabel: { color: '#94a3b8', fontSize: 10 } },
       series: [
         {
@@ -573,18 +635,63 @@ const DeviceDetailPage: React.FC = () => {
 
   const stringOptions = (s: TimeSeries) => {
     const cats = Array.from(new Set(s.points.map(p => p.state).filter(Boolean) as string[]));
+    const range = (chartData?.range_resolved) || (modalChartData?.range_resolved);
+    const minTime = range?.from ? new Date(range.from).getTime() : undefined;
+    const maxTime = range?.to ? new Date(range.to).getTime() : undefined;
+
     return {
       tooltip: { 
         trigger: 'axis', 
         confine: true,
-        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.1)', width: 1 }, z: 10 },
+        axisPointer: { 
+          type: 'line', 
+          lineStyle: { color: '#cbd5e1', width: 1 }, 
+          z: 10 
+        },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
-        textStyle: { color: '#1e293b', fontSize: 12 }
+        padding: [8, 12],
+        textStyle: { color: '#1e293b', fontSize: 12 },
+        extraCssText: 'shadow-md rounded-lg border border-slate-200',
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${params[0].axisValueLabel}</div>`;
+          params.forEach((p: any) => {
+            res += `<div class="flex items-center justify-between gap-6 py-0.5">
+                      <div class="flex items-center gap-2">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${p.color};"></span>
+                        <span class="text-slate-600 font-medium">${p.seriesName}</span>
+                      </div>
+                      <span class="font-bold text-slate-900">${p.data[1]}</span>
+                    </div>`;
+          });
+          return res;
+        }
       },
       grid: { left: '3%', right: '3%', bottom: 30, top: 10, containLabel: true },
-      xAxis: { type: 'time', boundaryGap: false, axisLabel: { color: '#94a3b8', fontSize: 10 } },
+      xAxis: { 
+        type: 'time', 
+        boundaryGap: false, 
+        min: minTime,
+        max: maxTime,
+        axisLabel: { 
+          color: '#94a3b8', 
+          fontSize: 10,
+          hideOverlap: true,
+          formatter: (value: number) => {
+            const date = new Date(value);
+            const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
+            if (isMidnight) {
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
+            }
+            return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          },
+          rich: {
+            bold: { fontWeight: 'bold', color: '#475569' }
+          }
+        } 
+      },
       yAxis: { type: 'category', data: cats, axisLabel: { color: '#94a3b8', fontSize: 10 } },
       series: [
         {
@@ -608,10 +715,12 @@ const DeviceDetailPage: React.FC = () => {
   const onChartReadySetGroup = (instance: any) => {
     if (!instance) return;
     instance.group = groupId;
-    // Verzögerte Verbindung, um sicherzustellen, dass alle Instanzen bereit sind
+    // Sofortige Verbindung versuchen
+    echarts.connect(groupId);
+    // Erneute Verbindung nach Verzögerung, falls DOM noch nicht stabil
     setTimeout(() => {
       echarts.connect(groupId);
-    }, 100);
+    }, 500);
   };
 
   // Modal TimeRange change handler

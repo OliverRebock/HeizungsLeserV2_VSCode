@@ -85,7 +85,7 @@ const AppLayout: React.FC = () => {
 
         <div className="p-4 border-t border-slate-800">
           <div className="px-4 py-1 mb-2">
-            <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">v2.4.13-stable</p>
+            <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">v2.4.14-stable</p>
           </div>
           <div className="px-4 py-3 mb-4">
             <p className="text-sm font-medium truncate">{user?.full_name || user?.email}</p>
