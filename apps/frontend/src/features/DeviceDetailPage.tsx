@@ -212,24 +212,37 @@ const DeviceDetailPage: React.FC = () => {
     };
 
     series.forEach((s) => {
-      // WICHTIG: Datentypen strikt trennen
-      if (s.data_kind === 'numeric') {
+      // WICHTIG: Datentypen strikt nach render_mode trennen
+      if (s.render_mode === 'history_counter' || s.render_mode === 'history_line') {
         const unit = s.meta?.unit_of_measurement || (s.meta as any)?.unit || '';
         const key = normalizeUnit(unit);
-        console.log(`Processing numeric entity: ${s.entity_id}, Unit: ${unit}, Normalized: ${key}`);
+        console.log(`Processing numeric entity (${s.render_mode}): ${s.entity_id}, Unit: ${unit}, Normalized: ${key}`);
         
-        // BUGFIX: Wenn das Backend (durch den vorherigen Komma-Bug) eine aggregierte Serie geliefert hat,
-        // splitten wir sie hier nicht künstlich auf, sondern verlassen uns jetzt auf saubere Backend-Daten.
         if (!numericGroups.has(key)) numericGroups.set(key, []);
         numericGroups.get(key)!.push(s);
-      } else if (s.data_kind === 'binary') {
-        binaries.push(s);
-      } else if (s.data_kind === 'enum') {
-        // Enums werden nie in den numerischen Vergleich aufgenommen,
-        // auch wenn sie eine Einheit wie °C haben.
-        enums.push(s);
-      } else if (s.data_kind === 'string') {
-        strings.push(s);
+      } else if (s.render_mode === 'state_timeline') {
+        // Binär/Enum/String werden jetzt einheitlich als state_timeline behandelt
+        if (s.data_kind === 'binary') {
+          binaries.push(s);
+        } else if (s.data_kind === 'enum') {
+          enums.push(s);
+        } else {
+          strings.push(s);
+        }
+      } else {
+        // Fallback für alte Daten/inkonsistente API
+        if (s.data_kind === 'numeric') {
+          const unit = s.meta?.unit_of_measurement || (s.meta as any)?.unit || '';
+          const key = normalizeUnit(unit);
+          if (!numericGroups.has(key)) numericGroups.set(key, []);
+          numericGroups.get(key)!.push(s);
+        } else if (s.data_kind === 'binary') {
+          binaries.push(s);
+        } else if (s.data_kind === 'enum') {
+          enums.push(s);
+        } else {
+          strings.push(s);
+        }
       }
     });
 
