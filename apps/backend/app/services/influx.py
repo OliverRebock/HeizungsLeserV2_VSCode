@@ -766,7 +766,7 @@ class InfluxService:
                                 fake_ts = start_rfc if "T" in start_rfc else datetime.now(dt_timezone.utc).isoformat().replace('+00:00', 'Z')
                                 if "T" in fake_ts and not fake_ts.endswith('Z'):
                                     fake_ts += 'Z'
-                                points.append(DataPoint(ts=fake_ts, value=num_val, state=state))
+                                points.append(DataPoint(ts=fake_ts, value=num_val, state=state or "start_padding"))
                                 logger.debug(f"INFLUX_SERVICE: Added START-POINT for {eid} (counter={is_counter}): {val} at {fake_ts}")
                             else:
                                 logger.debug(f"INFLUX_SERVICE: Skipping pre-range point for numeric {eid}: {val}")
@@ -864,14 +864,12 @@ class InfluxService:
                 # Wichtig: Für Counter nutzen wir eine strikte Logik ohne synthetische Hilfspunkte
                 if is_counter:
                     try:
-                        # Sortieren der echten Messpunkte
-                        real_points = [p for p in points if p.state != "gap" and p.value is not None]
-                        if real_points:
-                            # Wir sortieren sie nach Zeit, um den wirklich neuesten echten Wert zu finden
-                            real_points.sort(key=lambda x: x.ts)
-                            last_real = real_points[-1]
-                            
-                            # --- COUNTER-ENDPUNKT LOGIK ---
+                        # Wir entfernen alle Punkte, die einen state "gap" haben
+                        new_points = [p for p in points if p.state != "gap" and p.value is not None]
+                        # Wir stellen sicher, dass die Liste nach Zeit sortiert ist
+                        new_points.sort(key=lambda x: x.ts)
+                        
+                        if new_points:
                             # Wir bestimmen das absolute Ende als ISO-String mit 'Z'
                             final_end_ts = end_rfc
                             if not isinstance(final_end_ts, str) or "T" not in str(final_end_ts):
@@ -879,21 +877,26 @@ class InfluxService:
                             if "T" in final_end_ts and not final_end_ts.endswith('Z'):
                                 final_end_ts += 'Z'
                                 
-                            # Wir ersetzen die points-Liste für Counter komplett durch die bereinigte Liste
-                            # (Startpunkt + echte Punkte + Endpunkt), um Gaps/Padding sicher zu entfernen.
-                            # WICHTIG: Wir entfernen alle Punkte, die einen state "gap" haben.
-                            new_points = [p for p in points if p.state != "gap" and p.value is not None]
-                            # Wir stellen sicher, dass die Liste nach Zeit sortiert ist
-                            new_points.sort(key=lambda x: x.ts)
+                            # WICHTIG: Wenn InfluxDB Datenpunkte liefert, die NACH dem angeforderten 
+                            # Zeitraum liegen (z.B. durch Latenz oder Zeitdrift), filtern wir diese hier aus, 
+                            # damit der Endpunkt am Rand wirklich der letzte sichtbare Wert ist.
+                            new_points = [p for p in new_points if p.ts <= final_end_ts]
                             
                             if new_points:
                                 last_real = new_points[-1]
+                                
                                 # Wenn der letzte echte Punkt vor dem Ende liegt, ziehen wir ihn flach bis zum Rand
                                 if last_real.ts < final_end_ts:
                                     new_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
                                     logger.debug(f"INFLUX_SERVICE: Counter final endpoint for {eid} set to {final_end_ts} with value {last_real.value}")
+                                elif last_real.ts == final_end_ts:
+                                    # Sicherstellen, dass der Punkt am Ende auch den korrekten State hat
+                                    new_points[-1] = DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state)
                                 
-                                points = new_points
+                                # Letzter Check: Wenn wir einen Start-Padding Punkt haben und danach echte Punkte,
+                                # stellen wir sicher, dass der Start-Padding Punkt nicht den ersten echten Wert überschreibt,
+                                # falls die Zeitstempel identisch sind.
+                                points = sorted(new_points, key=lambda x: (x.ts, 0 if x.state == "start_padding" else 1))
                     except Exception as e:
                         logger.error(f"INFLUX_SERVICE: Counter carry forward error for {eid}: {e}")
                 else:
@@ -1003,7 +1006,7 @@ class InfluxService:
                 data_kind=data_kind,
                 value_semantics=value_semantics,
                 chartable=True,
-                points=sorted(points, key=lambda p: p.ts),
+                points=points,
                 meta={
                     "unit_of_measurement": unit_of_measurement,
                     "on_label": "An" if data_kind == "binary" else None,
