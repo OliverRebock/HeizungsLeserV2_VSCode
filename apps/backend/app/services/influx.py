@@ -658,18 +658,20 @@ class InfluxService:
 
         # Resolve relative times to absolute for the frontend
         now_utc = datetime.now(dt_timezone.utc)
-        resolved_from = flux_start
-        resolved_to = flux_end if flux_end != "now()" else now_utc.isoformat()
+        resolved_from = str(flux_start)
+        resolved_to = str(flux_end) if flux_end != "now()" else now_utc.isoformat()
 
         if isinstance(flux_start, str) and flux_start.startswith("-") and "T" not in flux_start:
             # Relative duration
             try:
-                val = int(flux_start[1:-1])
-                unit = flux_start[-1]
-                if unit == 'h': resolved_from = (now_utc - timedelta(hours=val)).isoformat()
-                elif unit == 'd': resolved_from = (now_utc - timedelta(days=val)).isoformat()
-                elif unit == 'm': resolved_from = (now_utc - timedelta(minutes=val)).isoformat()
-                elif unit == 's': resolved_from = (now_utc - timedelta(seconds=val)).isoformat()
+                val_str = flux_start[1:-1]
+                if val_str:
+                    val = int(val_str)
+                    unit = flux_start[-1]
+                    if unit == 'h': resolved_from = (now_utc - timedelta(hours=val)).isoformat()
+                    elif unit == 'd': resolved_from = (now_utc - timedelta(days=val)).isoformat()
+                    elif unit == 'm': resolved_from = (now_utc - timedelta(minutes=val)).isoformat()
+                    elif unit == 's': resolved_from = (now_utc - timedelta(seconds=val)).isoformat()
             except: pass
 
         logger.debug(f"INFLUX_SERVICE: Final flux range before fixing: {flux_start} to {flux_end}")
@@ -685,6 +687,11 @@ class InfluxService:
         # Absolute Endzeitpunkte ebenfalls vom Minus befreien
         if flux_end and "T" in str(flux_end) and str(flux_end).startswith("-"):
             flux_end = str(flux_end)[1:]
+            
+        # NEU: Sicherstellen, dass flux_end ein ISO-String ist, falls es ein absoluter Zeitpunkt ist
+        # (notwendig für den späteren Vergleich mit last_real.ts)
+        if flux_end and "T" in str(flux_end) and not str(flux_end).endswith('Z') and '+' not in str(flux_end):
+            flux_end = str(flux_end) + 'Z'
 
         logger.debug(f"INFLUX_SERVICE: Final flux range: {flux_start} to {flux_end}")
 
@@ -708,6 +715,13 @@ class InfluxService:
             range_start = start_val
             range_stop = end_val
             
+            # Metadata pre-fetch initialization
+            friendly_name = eid.replace('_', ' ').replace('.', ' ').title()
+            domain = eid.split('.')[0] if '.' in eid else "sensor"
+            unit_of_measurement = None
+            data_kind = self._get_data_kind(domain, eid)
+            value_semantics = self._get_value_semantics(eid)
+            
             # --- NEU: Vorherigen Wert abfragen (Last known value before start) ---
             # Wir suchen den letzten Punkt VOR dem gewählten Startzeitpunkt
             last_query = f'''
@@ -720,18 +734,10 @@ class InfluxService:
             '''
             
             points = []
-            friendly_name = eid.replace('_', ' ').replace('.', ' ').title()
-            domain = eid.split('.')[0] if '.' in eid else "sensor"
-            unit_of_measurement = None
 
             # 1. Letzten bekannten Wert vor dem Zeitraum holen
-            # WICHTIG: Für NUMERISCHE Entitäten setzen wir den künstlichen Startpunkt NICHT 
-            # auf den exakten Range-Beginn, um Artefakte/Ausschläge zu vermeiden, wenn der 
-            # Punkt zeitlich weit weg liegt. Stattdessen fügen wir ihn nur ein, wenn wir 
-            # wirklich wissen, dass der Wert bis zum Start konstant blieb.
-            # EXZEPTION: Für Counter/Zähler (starts, total, count) übernehmen wir den letzten 
-            # bekannten Wert als Startpunkt am linken Rand, um eine HA-nahe Step-Line zu ermöglichen.
-            data_kind = self._get_data_kind(domain, eid)
+            # WICHTIG: Für Counter/Zähler übernehmen wir den letzten bekannten Wert als Startpunkt am linken Rand.
+            # Für normale numerische Werte überspringen wir dies, um die X-Achse sauber zu halten.
             is_counter = any(kw in eid.lower() for kw in ["starts", "total", "count", "counter"])
             
             try:
@@ -742,22 +748,18 @@ class InfluxService:
                         if val is None: val = record.values.get("state")
                         
                         if val is not None:
-                            num_val = float(val) if isinstance(val, (int, float, bool)) else 0.0
+                            try:
+                                num_val = float(val) if isinstance(val, (int, float, bool)) else 0.0
+                            except:
+                                num_val = 0.0
                             state = str(val)
                             
-                            # Logik-Entscheidung:
-                            if data_kind in ("binary", "enum", "string") or is_counter:
-                                # Für State-History (Binär/Enum) UND COUNTER ist der Startpunkt ESSENZIELL
-                                # Wir nutzen den EXAKTEN Startzeitpunkt des Bereichs (start_rfc)
-                                # Dies erzeugt die HA-typische linke horizontale Stufe.
+                            if is_counter or data_kind in ("binary", "enum", "string"):
                                 fake_ts = start_rfc if "T" in start_rfc else datetime.now().isoformat()
                                 points.append(DataPoint(ts=fake_ts, value=num_val, state=state))
-                                logger.debug(f"INFLUX_SERVICE: Added START-POINT for {data_kind} (counter={is_counter}) entity {eid}: {val}")
+                                logger.debug(f"INFLUX_SERVICE: Added START-POINT for {eid} (counter={is_counter}): {val}")
                             else:
-                                # Für normale NUMERISCHE Werte (Temperaturen etc.): 
-                                # AUF BENUTZERWUNSCH: Wir fügen KEINEN Punkt vor dem Range-Start mehr ein,
-                                # um zu verhindern, dass die X-Achse nach links gedehnt wird.
-                                logger.debug(f"INFLUX_SERVICE: Skipping pre-range point for numeric entity {eid} to keep X-axis clean: {val}")
+                                logger.debug(f"INFLUX_SERVICE: Skipping pre-range point for numeric {eid}: {val}")
             except Exception as e:
                 logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
 
@@ -804,12 +806,19 @@ class InfluxService:
                         elif isinstance(val, str):
                             state = val
                             # Mapping for binary-like strings to numeric values for charts
-                            low_val = val.lower()
-                            if low_val in ['on', 'true', 'online', 'active', 'heating', 'an']:
-                                num_val = 1.0
-                            elif low_val in ['off', 'false', 'offline', 'idle', 'inactive', 'aus']:
-                                num_val = 0.0
-                            else:
+                            try:
+                                low_val = val.lower()
+                                if low_val in ['on', 'true', 'online', 'active', 'heating', 'an']:
+                                    num_val = 1.0
+                                elif low_val in ['off', 'false', 'offline', 'idle', 'inactive', 'aus']:
+                                    num_val = 0.0
+                                else:
+                                    # Versuch als float zu parsen, falls es eine Zahl als String ist
+                                    try:
+                                        num_val = float(val)
+                                    except:
+                                        num_val = 0.0
+                            except:
                                 num_val = 0.0
                         
                         # --- NEU: Gap-Erkennung (Lücken im Messverlauf) ---
@@ -838,106 +847,95 @@ class InfluxService:
             except Exception as e:
                 logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")
                 
-            # 3. Carry Forward zum Endzeitpunkt (Last point to end of range)
-            # Auf Benutzerwunsch: Zeilinie IMMER bis zum rechten Rand (Uhrzeit jetzt) weiterziehen.
-            # Fachregel: Leistungswerte (instant) fallen auf 0, wenn der letzte Punkt > 15 Min alt ist.
-            value_semantics = self._get_value_semantics(eid, unit_of_measurement)
-            # DEBUG
-            if "power" in eid.lower() or "leistung" in eid.lower():
-                logger.info(f"INFLUX_DEBUG: {eid} has semantics: {value_semantics}")
-
+            # 3. Carry Forward zum Endzeitpunkt
             if points:
-                # Sortieren um sicherzustellen, dass wir den wirklich letzten haben
-                points.sort(key=lambda p: p.ts)
-                last_p = points[-1]
-                
-                # Wir bestimmen den absoluten Endzeitpunkt für das Carry-Forward
-                import pytz
-                from datetime import datetime as dt_final, timezone as dt_timezone
-                
-                # Wir nutzen UTC für den robusten Zeitvergleich
-                now_utc = dt_final.now(dt_timezone.utc)
-                
-                final_end_ts = end_rfc
-                if "T" not in str(final_end_ts):
-                    final_end_ts = now_utc.isoformat()
-                
-                # Wir prüfen, ob das Ende des Zeitraums in der Nähe von "jetzt" liegt (innerhalb von 5 Min)
-                # Falls ja, wenden wir die Timeout-Logik (15 Min auf 0) an.
-                # Falls nein (z.B. Ansicht "Gestern"), ziehen wir den Wert einfach bis zum Ende des Zeitraums durch.
-                is_near_now = False
-                try:
-                    ts_end_to_parse = final_end_ts.replace('Z', '+00:00')
-                    dt_end = datetime.fromisoformat(ts_end_to_parse)
-                    if dt_end.tzinfo is None:
-                        dt_end = dt_end.replace(tzinfo=dt_timezone.utc)
-                    
-                    # Wenn das Ende des Graphen weniger als 5 Min von JETZT entfernt ist
-                    if abs((now_utc - dt_end).total_seconds()) < 300:
-                        is_near_now = True
-                except:
-                    # Fallback auf True für relative Zeitangaben wie "now()"
-                    if "now" in str(end_rfc).lower():
-                        is_near_now = True
-
-                # Nur wenn der letzte Punkt zeitlich vor dem Ende liegt (ISO string compare)
-                if last_p.ts < final_end_ts:
-                    carry_value = last_p.value
-                    carry_state = last_p.state
-                    
-                    # Logik für momentane Werte (Leistung etc.)
-                    if value_semantics == "instant":
-                        try:
-                            # Prüfen wie alt der letzte Punkt ist (Influx liefert UTC)
-                            ts_to_parse = last_p.ts.replace('Z', '+00:00')
-                            dt_last = datetime.fromisoformat(ts_to_parse)
-                            # Sicherstellen dass dt_last auch timezone-aware in UTC ist
-                            if dt_last.tzinfo is None:
-                                dt_last = dt_last.replace(tzinfo=dt_timezone.utc)
+                # Wichtig: Für Counter nutzen wir eine strikte Logik ohne synthetische Hilfspunkte
+                if is_counter:
+                    try:
+                        # Sortieren der echten Messpunkte
+                        real_points = [p for p in points if p.state != "gap" and p.value is not None]
+                        if real_points:
+                            # Wir sortieren sie nach Zeit, um den wirklich neuesten echten Wert zu finden
+                            real_points.sort(key=lambda x: x.ts)
+                            last_real = real_points[-1]
                             
-                            # Wenn wir uns am aktuellen Rand befinden (HEUTE / JETZT):
-                            # Wenn der letzte Punkt älter als 15 Minuten ist, fallen wir am Rand auf None (Gap)
-                            if is_near_now:
-                                # Wir prüfen gegen den absoluten JETZT Zeitpunkt, nicht gegen das Graph-Ende,
-                                # um Geisterlinien am aktuellen Rand zu vermeiden.
-                                diff_seconds = (now_utc - dt_last).total_seconds()
-                                if diff_seconds > 10800: # 3 Stunden (statt 15 Min)
-                                    # NEU: Wir fügen einen Punkt direkt beim letzten echten Wert + 1ms ein,
-                                    # gefolgt von einem Gap (None) am rechten Rand.
-                                    # Das sorgt dafür, dass die blaue Linie am letzten echten Messwert abbricht.
-                                    dt_drop = dt_last + timedelta(milliseconds=1)
-                                    drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
-                                    points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
-                                    
-                                    # Wir setzen den Wert auf None (Gap), statt auf 0.0
-                                    # Die visuelle Null-Referenz kommt nun exklusiv aus dem Frontend (markLine)
-                                    carry_value = None
-                                    carry_state = f"Keine Daten (Timeout: {int(diff_seconds/60)}m alt)"
-                                    logger.info(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), adding gap (None) at end.")
-                            else:
-                                # Wir sind in einer historischen Ansicht (z.B. GESTERN).
-                                # Auch hier: Wenn zwischen dem letzten Punkt und dem Zeitraum-Ende > 3 Stunden liegen,
-                                # lassen wir den Wert auf None (Gap) fallen.
-                                diff_to_end = (dt_end - dt_last).total_seconds()
-                                if diff_to_end > 10800: # 3 Stunden
-                                    dt_drop = dt_last + timedelta(milliseconds=1)
-                                    drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
-                                    points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
-                                    
-                                    carry_value = None
-                                    carry_state = "Keine Daten (Historisches Timeout)"
-                                    logger.debug(f"INFLUX_SERVICE: Historical timeout for {eid} at {final_end_ts} -> Gap")
-                                    
-                        except Exception as e:
-                            logger.error(f"INFLUX_SERVICE: Error calculating timeout for {eid}: {e}")
+                            # Wir bestimmen das absolute Ende
+                            final_end_ts = end_rfc
+                            if not isinstance(final_end_ts, str) or "T" not in str(final_end_ts):
+                                final_end_ts = datetime.now(dt_timezone.utc).isoformat()
+                                
+                            # Wenn der letzte echte Punkt vor dem Ende liegt, ziehen wir ihn flach bis zum Rand
+                            if last_real.ts < final_end_ts:
+                                # Wir ersetzen die points-Liste für Counter komplett durch die bereinigte Liste
+                                # (Startpunkt + echte Punkte + Endpunkt), um Gaps/Padding sicher zu entfernen.
+                                new_points = [p for p in points if p.state != "gap" and p.value is not None]
+                                # Wir stellen sicher, dass die Liste nach Zeit sortiert ist
+                                new_points.sort(key=lambda x: x.ts)
+                                new_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
+                                points = new_points
+                                logger.debug(f"INFLUX_SERVICE: Counter final endpoint for {eid} set to {final_end_ts} with value {last_real.value}")
+                    except Exception as e:
+                        logger.error(f"INFLUX_SERVICE: Counter carry forward error for {eid}: {e}")
+                else:
+                    # --- GENERISCHE LOGIK FÜR NORMALE NUMERIC/INSTANT REIHEN ---
+                    points.sort(key=lambda p: p.ts)
+                    last_p = points[-1]
+                    
+                    # Wir bestimmen den absoluten Endzeitpunkt für das Carry-Forward
+                    now_utc = datetime.now(dt_timezone.utc)
+                    final_end_ts = end_rfc
+                    if "T" not in str(final_end_ts):
+                        final_end_ts = now_utc.isoformat()
+                        
+                    is_near_now = False
+                    try:
+                        ts_end_to_parse = final_end_ts.replace('Z', '+00:00')
+                        dt_end = datetime.fromisoformat(ts_end_to_parse)
+                        if dt_end.tzinfo is None:
+                            dt_end = dt_end.replace(tzinfo=dt_timezone.utc)
+                        if abs((now_utc - dt_end).total_seconds()) < 300:
+                            is_near_now = True
+                    except:
+                        if "now" in str(end_rfc).lower():
+                            is_near_now = True
 
-                    points.append(DataPoint(ts=final_end_ts, value=carry_value, state=carry_state))
-                    logger.debug(f"INFLUX_SERVICE: Carrying forward {eid} to absolute end: {final_end_ts} (Value: {carry_value})")
+                    if last_p.ts < final_end_ts:
+                        carry_value = last_p.value
+                        carry_state = last_p.state
+                        
+                        if value_semantics == "instant":
+                            try:
+                                ts_to_parse = last_p.ts.replace('Z', '+00:00')
+                                dt_last = datetime.fromisoformat(ts_to_parse)
+                                if dt_last.tzinfo is None:
+                                    dt_last = dt_last.replace(tzinfo=dt_timezone.utc)
+                                
+                                if is_near_now:
+                                    diff_seconds = (now_utc - dt_last).total_seconds()
+                                    if diff_seconds > 10800: # 3 Stunden
+                                        dt_drop = dt_last + timedelta(milliseconds=1)
+                                        drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
+                                        points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
+                                        carry_value = None
+                                        carry_state = f"Keine Daten (Timeout)"
+                                else:
+                                    diff_to_end = (dt_end - dt_last).total_seconds()
+                                    if diff_to_end > 10800: # 3 Stunden
+                                        dt_drop = dt_last + timedelta(milliseconds=1)
+                                        drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
+                                        points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
+                                        carry_value = None
+                                        carry_state = "Keine Daten (Timeout)"
+                            except: pass
+
+                        points.append(DataPoint(ts=final_end_ts, value=carry_value, state=carry_state))
 
             # --- NEU: Double Padding am Anfang für Step-Lines (HA-Style) ---
             # Um schräge Linien vom Start zum ersten echten Punkt zu vermeiden, 
             # fügen wir einen Punkt kurz vor dem ersten echten Punkt ein (mit dem alten Wert)
-            if len(points) >= 2:
+            # WICHTIG: Für COUNTER deaktivieren wir das Double-Padding am Anfang, 
+            # da dies bei step: 'end' unnötig ist und zu Fehlern führen kann.
+            if len(points) >= 2 and not is_counter:
                 points.sort(key=lambda p: p.ts)
                 # Wenn der erste Punkt ein künstlicher Startpunkt ist (ts == start_rfc)
                 # und der zweite Punkt ein echter Messwert ist, brauchen wir dazwischen 
