@@ -249,9 +249,11 @@ const DeviceDetailPage: React.FC = () => {
     return {
       tooltip: { 
         trigger: 'axis', 
+        confine: true, // Tooltip innerhalb des Chart-Bereichs halten
         axisPointer: { 
           type: 'line', // Ruhige vertikale Linie statt Crosshair
-          lineStyle: { color: '#cbd5e1', width: 1 }
+          lineStyle: { color: '#cbd5e1', width: 1 },
+          z: 10 // Vor die Linien legen
         },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
@@ -421,7 +423,8 @@ const DeviceDetailPage: React.FC = () => {
     return {
       tooltip: { 
         trigger: 'axis', 
-        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.05)', width: 1 } },
+        confine: true,
+        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.05)', width: 1 }, z: 10 },
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
@@ -539,7 +542,8 @@ const DeviceDetailPage: React.FC = () => {
     return {
       tooltip: { 
         trigger: 'axis', 
-        axisPointer: { type: 'cross' },
+        confine: true,
+        axisPointer: { type: 'cross', z: 10 },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
@@ -572,7 +576,8 @@ const DeviceDetailPage: React.FC = () => {
     return {
       tooltip: { 
         trigger: 'axis', 
-        axisPointer: { type: 'cross' },
+        confine: true,
+        axisPointer: { type: 'cross', z: 10 },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
