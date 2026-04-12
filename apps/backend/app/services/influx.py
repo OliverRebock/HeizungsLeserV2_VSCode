@@ -10,7 +10,7 @@ from app.schemas.influx import Entity, DataPoint, TimeSeriesResponse, DashboardE
 import json
 import pytz
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -245,23 +245,262 @@ class InfluxService:
             
         return "default"
 
-    def _get_render_mode(self, eid: str, data_kind: str) -> str:
+    def _format_utc_timestamp(self, value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+    def _parse_duration(self, value: str) -> Optional[timedelta]:
+        if not value:
+            return None
+
+        normalized = value.strip().lower()
+        if normalized.startswith('-'):
+            normalized = normalized[1:]
+
+        if len(normalized) < 2:
+            return None
+
+        try:
+            amount = int(normalized[:-1])
+        except ValueError:
+            return None
+
+        unit = normalized[-1]
+        if unit == 's':
+            return timedelta(seconds=amount)
+        if unit == 'm':
+            return timedelta(minutes=amount)
+        if unit == 'h':
+            return timedelta(hours=amount)
+        if unit == 'd':
+            return timedelta(days=amount)
+        if unit == 'w':
+            return timedelta(weeks=amount)
+        return None
+
+    def _resolve_time_range(
+        self,
+        start: Optional[str],
+        end: Optional[str],
+        tz_local: Any,
+    ) -> Tuple[datetime, datetime]:
+        now_utc = datetime.now(timezone.utc)
+        now_local = now_utc.astimezone(tz_local)
+
+        def parse_absolute(value: str) -> datetime:
+            normalized = value.strip()
+            parsed = datetime.fromisoformat(normalized.replace('Z', '+00:00'))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+
+        end_dt = now_utc
+        if end and end != "now()":
+            duration = self._parse_duration(end)
+            if duration is not None:
+                end_dt = now_utc - duration
+            else:
+                end_dt = parse_absolute(end)
+
+        if not start:
+            start_dt = end_dt - timedelta(hours=24)
+        elif start == 'today':
+            start_dt = now_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        elif start == 'yesterday':
+            yesterday_start = (now_local - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            start_dt = yesterday_start.astimezone(timezone.utc)
+            if not end:
+                end_dt = (yesterday_start + timedelta(days=1)).astimezone(timezone.utc)
+        elif start == 'this_week':
+            monday_start = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            start_dt = monday_start.astimezone(timezone.utc)
+        elif start == 'this_month':
+            month_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            start_dt = month_start.astimezone(timezone.utc)
+        else:
+            duration = self._parse_duration(start)
+            if duration is not None:
+                start_dt = end_dt - duration
+            else:
+                start_dt = parse_absolute(start)
+
+        if end_dt <= start_dt:
+            end_dt = start_dt + timedelta(seconds=1)
+
+        return start_dt.astimezone(timezone.utc), end_dt.astimezone(timezone.utc)
+
+    def _parse_numeric_value(self, raw_value: Any) -> Optional[float]:
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, bool):
+            return 1.0 if raw_value else 0.0
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value)
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip()
+            lowered = normalized.lower()
+            if lowered in {'on', 'true', 'active', 'heating', 'an', 'open'}:
+                return 1.0
+            if lowered in {'off', 'false', 'inactive', 'idle', 'aus', 'closed'}:
+                return 0.0
+            try:
+                return float(normalized.replace(',', '.'))
+            except ValueError:
+                return None
+        return None
+
+    def _stringify_state_value(self, raw_value: Any) -> Optional[str]:
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, bool):
+            return 'on' if raw_value else 'off'
+        return str(raw_value)
+
+    def _is_strict_numeric_value(self, raw_value: Any) -> bool:
+        if raw_value is None or isinstance(raw_value, bool):
+            return False
+        if isinstance(raw_value, (int, float)):
+            return True
+        if isinstance(raw_value, str):
+            try:
+                float(raw_value.strip().replace(',', '.'))
+                return True
+            except ValueError:
+                return False
+        return False
+
+    def _is_binary_state_value(self, raw_value: Any) -> bool:
+        if isinstance(raw_value, bool):
+            return True
+        if not isinstance(raw_value, str):
+            return False
+        return raw_value.strip().lower() in {
+            'on', 'off', 'true', 'false', 'active', 'inactive', 'an', 'aus', 'open', 'closed'
+        }
+
+    def _build_sample_point(self, point_dt: datetime, raw_value: Any) -> Dict[str, Any]:
+        if point_dt.tzinfo is None:
+            point_dt = point_dt.replace(tzinfo=timezone.utc)
+        point_dt = point_dt.astimezone(timezone.utc)
+        return {
+            'dt': point_dt,
+            'raw_value': raw_value,
+            'numeric_value': self._parse_numeric_value(raw_value),
+            'state': self._stringify_state_value(raw_value),
+            'strict_numeric': self._is_strict_numeric_value(raw_value),
+            'binary_like': self._is_binary_state_value(raw_value),
+        }
+
+    def _parse_options(self, raw_options: Any) -> Optional[List[str]]:
+        if raw_options is None:
+            return None
+        if isinstance(raw_options, list):
+            return [str(item) for item in raw_options]
+
+        text = str(raw_options).strip()
+        if not text:
+            return None
+
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except Exception:
+            pass
+
+        if ',' in text:
+            items = [item.strip() for item in text.split(',') if item.strip()]
+            return items or None
+
+        return [text]
+
+    def _is_monotonic_counter(self, samples: List[Dict[str, Any]]) -> bool:
+        numeric_values = [sample['numeric_value'] for sample in samples if sample.get('strict_numeric') and sample.get('numeric_value') is not None]
+        if len(numeric_values) < 3:
+            return False
+
+        if any(abs(value - round(value)) > 1e-9 for value in numeric_values):
+            return False
+
+        if not any(current > previous for previous, current in zip(numeric_values, numeric_values[1:])):
+            return False
+
+        return all(current >= previous for previous, current in zip(numeric_values, numeric_values[1:]))
+
+    def _classify_data_kind(
+        self,
+        domain: str,
+        eid: str,
+        state_class: Optional[str] = None,
+        unit_of_measurement: Optional[str] = None,
+        options: Optional[List[str]] = None,
+        samples: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        lower_domain = (domain or 'sensor').lower()
+        normalized_state_class = (state_class or '').lower()
+        samples = [sample for sample in (samples or []) if sample]
+
+        if lower_domain in {'binary_sensor', 'switch', 'lock', 'input_boolean'}:
+            return 'binary'
+
+        if lower_domain in {'select', 'input_select', 'device_tracker', 'person', 'update'}:
+            return 'enum'
+
+        if normalized_state_class in {'measurement', 'total', 'total_increasing'}:
+            return 'numeric'
+
+        if unit_of_measurement:
+            return 'numeric'
+
+        if samples and all(sample.get('strict_numeric') for sample in samples):
+            return 'numeric'
+
+        if samples and all(sample.get('binary_like') for sample in samples):
+            return 'binary'
+
+        heuristic_kind = self._get_data_kind(lower_domain, eid)
+        if heuristic_kind != 'numeric':
+            return heuristic_kind
+
+        if options:
+            return 'enum'
+
+        if samples and any(sample.get('state') for sample in samples):
+            return 'string'
+
+        return heuristic_kind
+
+    def _get_render_mode(
+        self,
+        eid: str,
+        data_kind: str,
+        state_class: Optional[str] = None,
+        samples: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """
         Derives the render mode for frontend.
         - history_counter: For monotonic counters (Treppendarstellung).
         - history_line: For continuous values (Line chart).
         - state_timeline: For binary/enum/string states.
         """
-        lower_eid = eid.lower()
-        # Strenge Erkennung von Countern
-        if any(kw in lower_eid for kw in ["starts", "total", "count", "counter", "zähler", "zaehler"]):
-            return "history_counter"
-        
-        # Alles was nicht numerisch ist, ist eine state_timeline (Bänder)
         if data_kind in ("binary", "enum", "string"):
             return "state_timeline"
-            
-        # Standard für Numerik (Temperaturen, Leistung etc.)
+
+        normalized_state_class = (state_class or '').lower()
+        if normalized_state_class in {"total", "total_increasing"}:
+            return "history_counter"
+
+        if normalized_state_class == "measurement":
+            return "history_line"
+
+        lower_eid = eid.lower()
+        if any(kw in lower_eid for kw in ["starts", "total", "count", "counter", "zähler", "zaehler"]):
+            return "history_counter"
+
+        if self._is_monotonic_counter(samples or []):
+            return "history_counter"
+
         return "history_line"
 
     def _get_data_kind(self, domain: str, eid: str) -> str:
@@ -298,6 +537,219 @@ class InfluxService:
             return "enum"
             
         return "numeric"
+
+    def _extract_record_value(self, record: Any) -> Any:
+        raw_value = record.values.get("value")
+        if raw_value is None:
+            raw_value = record.values.get("state")
+        return raw_value
+
+    def _read_entity_metadata(
+        self,
+        query_api: Any,
+        bucket: str,
+        eid: str,
+        end_dt: datetime,
+    ) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {}
+        end_ts = self._format_utc_timestamp(end_dt)
+        metadata_query = f'''
+            from(bucket: "{bucket}")
+            |> range(start: 0, stop: time(v: "{end_ts}"))
+            |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+            |> filter(fn: (r) =>
+                r["_field"] == "friendly_name_str" or
+                r["_field"] == "unit_of_measurement_str" or
+                r["_field"] == "state_class_str" or
+                r["_field"] == "device_class_str" or
+                r["_field"] == "options_str"
+            )
+            |> last()
+            |> pivot(rowKey:["_measurement"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+
+        try:
+            tables = query_api.query(query=metadata_query)
+            for table in tables:
+                for record in table.records:
+                    values = record.values
+                    if values.get("friendly_name_str"):
+                        metadata["friendly_name"] = self._clean_friendly_name(str(values.get("friendly_name_str")))
+                    if values.get("unit_of_measurement_str"):
+                        metadata["unit_of_measurement"] = str(values.get("unit_of_measurement_str"))
+                    if values.get("state_class_str"):
+                        metadata["state_class"] = str(values.get("state_class_str"))
+                    if values.get("device_class_str"):
+                        metadata["device_class"] = str(values.get("device_class_str"))
+                    if values.get("options_str"):
+                        metadata["options"] = self._parse_options(values.get("options_str"))
+                    if values.get("domain"):
+                        metadata["domain"] = str(values.get("domain"))
+        except Exception as exc:
+            logger.debug(f"Metadata query failed for {eid}: {exc}")
+
+        return metadata
+
+    def _read_last_sample_before(
+        self,
+        query_api: Any,
+        bucket: str,
+        eid: str,
+        start_dt: datetime,
+    ) -> Optional[Dict[str, Any]]:
+        start_ts = self._format_utc_timestamp(start_dt)
+        last_query = f'''
+            from(bucket: "{bucket}")
+            |> range(start: 0, stop: time(v: "{start_ts}"))
+            |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+            |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
+            |> last()
+            |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+
+        try:
+            tables = query_api.query(query=last_query)
+            for table in tables:
+                for record in table.records:
+                    raw_value = self._extract_record_value(record)
+                    if raw_value is None:
+                        continue
+                    return self._build_sample_point(record.get_time(), raw_value)
+        except Exception as exc:
+            logger.debug(f"Last sample query failed for {eid}: {exc}")
+
+        return None
+
+    def _read_samples_in_range(
+        self,
+        query_api: Any,
+        bucket: str,
+        eid: str,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> List[Dict[str, Any]]:
+        start_ts = self._format_utc_timestamp(start_dt)
+        end_ts = self._format_utc_timestamp(end_dt)
+        flux_query = f'''
+            from(bucket: "{bucket}")
+            |> range(start: time(v: "{start_ts}"), stop: time(v: "{end_ts}"))
+            |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+            |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
+            |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+
+        samples: List[Dict[str, Any]] = []
+        try:
+            tables = query_api.query(query=flux_query)
+            for table in tables:
+                for record in table.records:
+                    raw_value = self._extract_record_value(record)
+                    if raw_value is None:
+                        continue
+                    samples.append(self._build_sample_point(record.get_time(), raw_value))
+        except Exception as exc:
+            logger.warning(f"Query failed for {eid}: {exc}")
+
+        samples.sort(key=lambda sample: sample['dt'])
+        return samples
+
+    def _append_history_point(
+        self,
+        points: List[DataPoint],
+        point_dt: datetime,
+        value: Optional[float],
+        state: Optional[str],
+    ) -> None:
+        if value is None and state is None:
+            return
+
+        point = DataPoint(
+            ts=self._format_utc_timestamp(point_dt),
+            value=value,
+            state=state,
+        )
+
+        if points and points[-1].ts == point.ts:
+            points[-1] = point
+            return
+
+        points.append(point)
+
+    def _build_history_counter_points(
+        self,
+        start_dt: datetime,
+        end_dt: datetime,
+        previous_sample: Optional[Dict[str, Any]],
+        actual_samples: List[Dict[str, Any]],
+    ) -> List[DataPoint]:
+        points: List[DataPoint] = []
+
+        if previous_sample and previous_sample.get('numeric_value') is not None:
+            if not actual_samples or actual_samples[0]['dt'] > start_dt:
+                self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+
+        for sample in actual_samples:
+            if sample.get('numeric_value') is None:
+                continue
+            self._append_history_point(points, sample['dt'], sample['numeric_value'], sample.get('state'))
+
+        if not points and previous_sample and previous_sample.get('numeric_value') is not None:
+            self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+
+        if points and points[-1].value is not None:
+            self._append_history_point(points, end_dt, points[-1].value, points[-1].state)
+
+        return points
+
+    def _build_history_line_points(
+        self,
+        start_dt: datetime,
+        end_dt: datetime,
+        previous_sample: Optional[Dict[str, Any]],
+        actual_samples: List[Dict[str, Any]],
+    ) -> List[DataPoint]:
+        points: List[DataPoint] = []
+
+        if previous_sample and previous_sample.get('numeric_value') is not None:
+            if not actual_samples or actual_samples[0]['dt'] > start_dt:
+                self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+
+        for sample in actual_samples:
+            if sample.get('numeric_value') is None:
+                continue
+            self._append_history_point(points, sample['dt'], sample['numeric_value'], sample.get('state'))
+
+        if not points and previous_sample and previous_sample.get('numeric_value') is not None:
+            self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+
+        if points and points[-1].value is not None:
+            self._append_history_point(points, end_dt, points[-1].value, points[-1].state)
+
+        return points
+
+    def _build_state_timeline_points(
+        self,
+        start_dt: datetime,
+        end_dt: datetime,
+        previous_sample: Optional[Dict[str, Any]],
+        actual_samples: List[Dict[str, Any]],
+    ) -> List[DataPoint]:
+        points: List[DataPoint] = []
+
+        if previous_sample:
+            if not actual_samples or actual_samples[0]['dt'] > start_dt:
+                self._append_history_point(points, start_dt, previous_sample.get('numeric_value'), previous_sample.get('state'))
+
+        for sample in actual_samples:
+            self._append_history_point(points, sample['dt'], sample.get('numeric_value'), sample.get('state'))
+
+        if not points and previous_sample:
+            self._append_history_point(points, start_dt, previous_sample.get('numeric_value'), previous_sample.get('state'))
+
+        if points:
+            self._append_history_point(points, end_dt, points[-1].value, points[-1].state)
+
+        return points
 
     async def get_entities(self, device: Device) -> List[Entity]:
         """
@@ -355,6 +807,9 @@ class InfluxService:
                 |> range(start: -30d)
                 |> filter(fn: (r) => r["_field"] == "friendly_name_str" or 
                                      r["_field"] == "unit_of_measurement_str" or 
+                                     r["_field"] == "state_class_str" or
+                                     r["_field"] == "device_class_str" or
+                                     r["_field"] == "options_str" or
                                      r["_field"] == "value" or 
                                      r["_field"] == "state" or
                                      r["_field"] == "_value")
@@ -376,6 +831,10 @@ class InfluxService:
                 for ent in entities:
                     m = meta_map.get(ent.entity_id)
                     if m:
+                        state_class = str(m.get("state_class_str")) if m.get("state_class_str") else None
+                        device_class = str(m.get("device_class_str")) if m.get("device_class_str") else None
+                        options = self._parse_options(m.get("options_str"))
+
                         # Friendly Name
                         f_name = m.get("friendly_name_str")
                         if f_name:
@@ -389,11 +848,14 @@ class InfluxService:
                         
                         if unit and unit != "multiple": # "multiple" ist ein Influx-Artefakt beim Pivot
                             ent.unit_of_measurement = str(unit)
+
+                        ent.state_class = state_class
+                        ent.device_class = device_class
+                        ent.options = options
                         
                         # Domain Update
                         if m.get("domain"):
                             ent.domain = m.get("domain")
-                            ent.data_kind = self._get_data_kind(ent.domain, ent.entity_id)
                         
                         ent.value_semantics = self._get_value_semantics(ent.entity_id, ent.unit_of_measurement)
 
@@ -408,6 +870,26 @@ class InfluxService:
                             # Zeitstempel aus den Rohdaten holen, falls vorhanden
                             if "_time" in m:
                                 ent.last_seen = m["_time"].isoformat()
+
+                        sample_values = []
+                        if val is not None:
+                            sample_dt = m.get("_time") if isinstance(m.get("_time"), datetime) else datetime.now(timezone.utc)
+                            sample_values.append(self._build_sample_point(sample_dt, val))
+
+                        ent.data_kind = self._classify_data_kind(
+                            ent.domain,
+                            ent.entity_id,
+                            state_class=state_class,
+                            unit_of_measurement=ent.unit_of_measurement,
+                            options=options,
+                            samples=sample_values,
+                        )
+                        ent.render_mode = self._get_render_mode(
+                            ent.entity_id,
+                            ent.data_kind,
+                            state_class=state_class,
+                            samples=sample_values,
+                        )
 
             except Exception as e:
                 logger.debug(f"Metadata enrichment failed: {e}")
@@ -433,6 +915,7 @@ class InfluxService:
                             friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
                             data_kind=data_kind,
                             value_semantics=self._get_value_semantics(eid),
+                            render_mode=self._get_render_mode(eid, data_kind),
                             chartable=True,
                             source_table=eid
                         ))
@@ -619,233 +1102,53 @@ class InfluxService:
         bucket = device.influx_database_name or settings.INFLUXDB_BUCKET
         query_api = self.client.query_api()
         results = []
-
-        import pytz
-        from datetime import datetime, timedelta, timezone as dt_timezone
         tz_berlin = pytz.timezone("Europe/Berlin")
-
-        def format_time(t, default_val="-24h"):
-            logger.debug(f"INFLUX_SERVICE: Formatting time input: '{t}' (type={type(t)})")
-            if not t: return default_val
-            if isinstance(t, str):
-                if t == "now()": return "now()"
-                
-                # Check for keywords first to avoid matching them in the relative check (e.g. 'today' contains 'd')
-                if t == "today": 
-                    now_val = datetime.now(tz_berlin)
-                    today_start = now_val.replace(hour=0, minute=0, second=0, microsecond=0)
-                    iso_start = today_start.isoformat()
-                    logger.debug(f"INFLUX_SERVICE: 'today' resolved to (Berlin): {iso_start}")
-                    return iso_start
-                    
-                if t == "yesterday":
-                    now_val = datetime.now(tz_berlin)
-                    yesterday_start = (now_val - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    yesterday_end = yesterday_start.replace(hour=23, minute=59, second=59, microsecond=999999)
-                    iso_start = yesterday_start.isoformat()
-                    iso_end = yesterday_end.isoformat()
-                    logger.debug(f"INFLUX_SERVICE: 'yesterday' resolved to (Berlin): {iso_start} to {iso_end}")
-                    return f"{iso_start}|{iso_end}"
-                
-                if t == "this_week":
-                    now_val = datetime.now(tz_berlin)
-                    monday_start = (now_val - timedelta(days=now_val.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-                    iso_start = monday_start.isoformat()
-                    logger.debug(f"INFLUX_SERVICE: 'this_week' resolved to (Berlin): {iso_start}")
-                    return iso_start
-
-                if t == "this_month":
-                    now_val = datetime.now(tz_berlin)
-                    month_start = now_val.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                    iso_start = month_start.isoformat()
-                    logger.debug(f"INFLUX_SERVICE: 'this_month' resolved to (Berlin): {iso_start}")
-                    return iso_start
-
-                # If it's a simple relative duration like 24h, 12h etc
-                if any(unit in t for unit in ['h', 'd', 'm', 's']) and "T" not in t:
-                    if t.startswith('-'):
-                        return t
-                    return f"-{t}"
-                
-                # Check for ISO format
-                if "T" in t:
-                    if not t.endswith('Z') and '+' not in t:
-                        return t + 'Z'
-                    return t
-            return default_val
-
-        flux_start = format_time(start, "-24h")
-        flux_end = format_time(end, "now()")
-        
-        # Handle the special "yesterday" pipe return
-        if "|" in flux_start:
-            flux_start, flux_end = flux_start.split("|")
-
-        # Resolve relative times to absolute for the frontend
-        now_utc = datetime.now(dt_timezone.utc)
-        resolved_from = str(flux_start)
-        resolved_to = str(flux_end) if flux_end != "now()" else now_utc.isoformat().replace('+00:00', 'Z')
-        if "T" in resolved_to and not resolved_to.endswith('Z'):
-            resolved_to += 'Z'
-
-        if isinstance(flux_start, str) and flux_start.startswith("-") and "T" not in flux_start:
-            # Relative duration
-            try:
-                val_str = flux_start[1:-1]
-                if val_str:
-                    val = int(val_str)
-                    unit = flux_start[-1]
-                    if unit == 'h': resolved_from = (now_utc - timedelta(hours=val)).isoformat().replace('+00:00', 'Z')
-                    elif unit == 'd': resolved_from = (now_utc - timedelta(days=val)).isoformat().replace('+00:00', 'Z')
-                    elif unit == 'm': resolved_from = (now_utc - timedelta(minutes=val)).isoformat().replace('+00:00', 'Z')
-                    elif unit == 's': resolved_from = (now_utc - timedelta(seconds=val)).isoformat().replace('+00:00', 'Z')
-                    
-                    if "T" in resolved_from and not resolved_from.endswith('Z'):
-                        resolved_from += 'Z'
-            except: pass
-
-        logger.debug(f"INFLUX_SERVICE: Final flux range before fixing: {flux_start} to {flux_end}")
-
-        # Fix for absolute timestamps: they must not have a leading minus
-        if flux_start and "T" in str(flux_start) and str(flux_start).startswith("-"):
-            flux_start = str(flux_start)[1:]
-            
-        # Falls end ein relativer String ohne Vorzeichen ist (z.B. "12h"), machen wir ihn negativ, falls es nicht "now()" ist
-        if flux_end and flux_end != "now()" and not str(flux_end).startswith("-") and any(u in str(flux_end) for u in ['h','d','m','s']) and "T" not in str(flux_end):
-            flux_end = f"-{flux_end}"
-        
-        # Absolute Endzeitpunkte ebenfalls vom Minus befreien
-        if flux_end and "T" in str(flux_end) and str(flux_end).startswith("-"):
-            flux_end = str(flux_end)[1:]
-            
-        # NEU: Sicherstellen, dass flux_end ein ISO-String ist, falls es ein absoluter Zeitpunkt ist
-        # (notwendig für den späteren Vergleich mit last_real.ts)
-        if flux_end and "T" in str(flux_end) and not str(flux_end).endswith('Z') and '+' not in str(flux_end):
-            flux_end = str(flux_end) + 'Z'
-
-        logger.debug(f"INFLUX_SERVICE: Final flux range: {flux_start} to {flux_end}")
+        start_dt, end_dt = self._resolve_time_range(start, end, tz_berlin)
+        resolved_from = self._format_utc_timestamp(start_dt)
+        resolved_to = self._format_utc_timestamp(end_dt)
 
         for eid in entity_ids:
-            # WICHTIG: Wir holen value ODER state (für Select-Entitäten).
-            # Die time() Funktion in Flux erwartet RFC3339 Format. 
-            # Python's isoformat() liefert manchmal Mikrosekunden, die Flux nicht mag, wenn kein Z am Ende steht.
-            # Wir stellen sicher, dass es als korrektes RFC3339 (mit Z) gesendet wird.
-            def to_rfc3339(ts_str):
-                if "T" in ts_str:
-                    if not ts_str.endswith('Z') and '+' not in ts_str:
-                        return ts_str + 'Z'
-                return ts_str
+            default_domain = eid.split('.')[0] if '.' in eid else "sensor"
+            metadata = self._read_entity_metadata(query_api, bucket, eid, end_dt)
+            previous_sample = self._read_last_sample_before(query_api, bucket, eid, start_dt)
+            actual_samples = self._read_samples_in_range(query_api, bucket, eid, start_dt, end_dt)
 
-            start_rfc = to_rfc3339(str(flux_start))
-            end_rfc = to_rfc3339(str(flux_end))
-            
-            start_val = f'time(v: "{start_rfc}")' if "T" in start_rfc else start_rfc
-            end_val = f'time(v: "{end_rfc}")' if "T" in end_rfc else end_rfc
-            
-            range_start = start_val
-            range_stop = end_val
-            
-            # Metadata pre-fetch initialization
-            friendly_name = eid.replace('_', ' ').replace('.', ' ').title()
-            domain = eid.split('.')[0] if '.' in eid else "sensor"
-            unit_of_measurement = None
-            data_kind = self._get_data_kind(domain, eid)
-            value_semantics = self._get_value_semantics(eid)
-            render_mode = self._get_render_mode(eid, data_kind)
-            
-            # 1. Letzten bekannten Wert vor dem Zeitraum holen (für alle Modi als Startpunkt)
-            last_query = f'''
-                from(bucket: "{bucket}")
-                |> range(start: 0, stop: {range_start})
-                |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
-                |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
-                |> last()
-                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-            '''
-            
-            points = []
-            try:
-                last_tables = query_api.query(query=last_query)
-                for table in last_tables:
-                    for record in table.records:
-                        val = record.values.get("value")
-                        if val is None: val = record.values.get("state")
-                        if val is not None:
-                            try:
-                                num_val = float(val) if isinstance(val, (int, float, bool)) else (float(val) if isinstance(val, str) and val.replace('.','',1).isdigit() else 0.0)
-                            except: num_val = 0.0
-                            points.append(DataPoint(ts=start_rfc, value=num_val, state=str(val)))
-            except Exception as e:
-                logger.debug(f"Last value query failed for {eid}: {e}")
+            classification_samples = ([] if previous_sample is None else [previous_sample]) + actual_samples
+            friendly_name = metadata.get("friendly_name") or eid.replace('_', ' ').replace('.', ' ').title()
+            domain = metadata.get("domain") or default_domain
+            unit_of_measurement = metadata.get("unit_of_measurement")
+            state_class = metadata.get("state_class")
+            device_class = metadata.get("device_class")
+            options = metadata.get("options")
 
-            # 2. Hauptdaten abrufen
-            flux_query = f'''
-                from(bucket: "{bucket}")
-                |> range(start: {range_start}, stop: {range_stop})
-                |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
-                |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state" or r["_field"] == "friendly_name_str" or r["_field"] == "unit_of_measurement_str")
-                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-            '''
-            
-            try:
-                tables = query_api.query(query=flux_query)
-                for table in tables:
-                    for record in table.records:
-                        ts = record.get_time().isoformat().replace('+00:00', 'Z')
-                        val = record.values.get("value")
-                        if val is None: val = record.values.get("state")
-                        
-                        # Metadata extraction
-                        if record.values.get("friendly_name_str"):
-                            friendly_name = self._clean_friendly_name(record.values.get("friendly_name_str"))
-                        if record.values.get("unit_of_measurement_str"):
-                            unit_of_measurement = str(record.values.get("unit_of_measurement_str"))
+            data_kind = self._classify_data_kind(
+                domain,
+                eid,
+                state_class=state_class,
+                unit_of_measurement=unit_of_measurement,
+                options=options,
+                samples=classification_samples,
+            )
+            value_semantics = self._get_value_semantics(eid, unit_of_measurement)
+            render_mode = self._get_render_mode(
+                eid,
+                data_kind,
+                state_class=state_class,
+                samples=classification_samples,
+            )
 
-                        if val is not None:
-                            try:
-                                num_val = float(val) if isinstance(val, (int, float, bool)) else (float(val) if isinstance(val, str) and val.replace('.','',1).isdigit() else 0.0)
-                            except: num_val = 0.0
-                            points.append(DataPoint(ts=ts, value=num_val, state=str(val)))
-            except Exception as e:
-                logger.warning(f"Query failed for {eid}: {e}")
+            if render_mode == "history_counter":
+                points = self._build_history_counter_points(start_dt, end_dt, previous_sample, actual_samples)
+            elif render_mode == "state_timeline":
+                points = self._build_state_timeline_points(start_dt, end_dt, previous_sample, actual_samples)
+            else:
+                points = self._build_history_line_points(start_dt, end_dt, previous_sample, actual_samples)
 
-            # 3. Pipeline-spezifische Nachbearbeitung
-            if points:
-                points.sort(key=lambda x: x.ts)
-                final_end_ts = resolved_to
-                
-                if render_mode == "history_counter":
-                    # STRENGER COUNTER: Letzter echter Wert bis zum Rand ziehen
-                    last_real = points[-1]
-                    points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
-                
-                elif render_mode == "state_timeline":
-                    # STRENGER STATE: Immer LOCF bis zum Rand
-                    last_real = points[-1]
-                    points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
-                
-                else: # history_line
-                    # 3-STUNDEN LOCF / GAP LOGIK
-                    processed_points = []
-                    for i in range(len(points)):
-                        processed_points.append(points[i])
-                        if i < len(points) - 1:
-                            # Gap Detection (3h)
-                            t1 = datetime.fromisoformat(points[i].ts.replace('Z', '+00:00'))
-                            t2 = datetime.fromisoformat(points[i+1].ts.replace('Z', '+00:00'))
-                            if (t2 - t1).total_seconds() > 10800:
-                                processed_points.append(DataPoint(ts=(t1 + timedelta(seconds=1)).isoformat().replace('+00:00', 'Z'), value=None, state="gap"))
-                    
-                    # Carry forward am Ende (3h)
-                    last_real = processed_points[-1]
-                    if last_real.value is not None:
-                        t_last = datetime.fromisoformat(last_real.ts.replace('Z', '+00:00'))
-                        t_end = datetime.fromisoformat(final_end_ts.replace('Z', '+00:00'))
-                        if (t_end - t_last).total_seconds() <= 10800:
-                            processed_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
-                        else:
-                            processed_points.append(DataPoint(ts=(t_last + timedelta(seconds=1)).isoformat().replace('+00:00', 'Z'), value=None, state="timeout"))
-                    points = processed_points
+            last_seen = None
+            if actual_samples:
+                last_seen = self._format_utc_timestamp(actual_samples[-1]['dt'])
+            elif previous_sample:
+                last_seen = self._format_utc_timestamp(previous_sample['dt'])
 
             results.append(TimeSeriesResponse(
                 entity_id=eid,
@@ -855,11 +1158,18 @@ class InfluxService:
                 value_semantics=value_semantics,
                 render_mode=render_mode,
                 chartable=True,
+                state_class=state_class,
+                device_class=device_class,
+                unit_of_measurement=unit_of_measurement,
                 points=points,
                 meta={
                     "unit_of_measurement": unit_of_measurement,
+                    "state_class": state_class,
+                    "device_class": device_class,
+                    "options": options,
+                    "last_seen": last_seen,
                     "on_label": "An" if data_kind == "binary" else None,
-                    "off_label": "Aus" if data_kind == "binary" else None
+                    "off_label": "Aus" if data_kind == "binary" else None,
                 }
             ))
             

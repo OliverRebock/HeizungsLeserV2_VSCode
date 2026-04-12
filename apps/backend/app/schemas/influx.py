@@ -10,6 +10,7 @@ class EntityBase(BaseModel):
     render_mode: str = "history_line" # history_counter, history_line, state_timeline
     chartable: bool = False
     icon: Optional[str] = None
+    state_class: Optional[str] = None
     device_class: Optional[str] = None
     unit_of_measurement: Optional[str] = None
     options: Optional[List[str]] = None
@@ -54,6 +55,9 @@ class TimeSeriesResponse(BaseModel):
     value_semantics: str = "default"
     render_mode: str = "history_line" # history_counter, history_line, state_timeline
     chartable: bool
+    state_class: Optional[str] = None
+    device_class: Optional[str] = None
+    unit_of_measurement: Optional[str] = None
     points: List[DataPoint]
     meta: Dict[str, Any]
 

@@ -50,6 +50,7 @@ export interface Entity {
   render_mode: string; // history_counter, history_line, state_timeline
   chartable: boolean;
   icon?: string;
+  state_class?: string;
   device_class?: string;
   unit_of_measurement?: string;
   options?: string[];
@@ -60,7 +61,7 @@ export interface Entity {
 
 export interface TimeSeriesPoint {
   ts: string;
-  value: number;
+  value?: number | null;
   state?: string;
 }
 
@@ -72,12 +73,17 @@ export interface TimeSeries {
   value_semantics?: string;
   render_mode: string;
   chartable: boolean;
+  state_class?: string;
+  device_class?: string;
+  unit_of_measurement?: string;
   points: TimeSeriesPoint[];
   meta: {
     options?: string[];
     icon?: string;
+    state_class?: string;
     device_class?: string;
     unit_of_measurement?: string;
+    last_seen?: string;
   };
 }
 
