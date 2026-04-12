@@ -371,15 +371,16 @@ const DeviceDetailPage: React.FC = () => {
                          s.entity_id.toLowerCase().includes('count') ||
                          s.entity_id.toLowerCase().includes('counter') ||
                          s.entity_id.toLowerCase().includes('zähler') ||
-                         s.entity_id.toLowerCase().includes('zaehler');
+                         s.entity_id.toLowerCase().includes('zaehler') ||
+                         s.data_kind === 'numeric'; // Alle numerischen als Treppe
         
         return {
           id: s.entity_id,
           name: s.friendly_name,
           type: 'line',
           showSymbol: false, 
-          step: isCounter ? 'end' : false, 
-          smooth: false, // Keine künstliche Glättung für ehrliche HA-Optik
+          step: 'end', // Einheitliche Treppendarstellung für alle numerischen Werte
+          smooth: false, 
           connectNulls: false,
           lineStyle: { 
             width: isCounter ? 2 : 1.5, // Kräftigere Linie für Counter wie HA
