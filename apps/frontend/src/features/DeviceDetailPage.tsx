@@ -328,7 +328,6 @@ const DeviceDetailPage: React.FC = () => {
           hideOverlap: true,
           formatter: (value: number) => {
             const date = new Date(value);
-            const rangeDays = maxTime && minTime ? (maxTime - minTime) / (1000 * 60 * 60 * 24) : 0;
             
             // Wenn wir einen Tageswechsel (Mitternacht) im Sichtfeld haben, zeigen wir dort das Datum fett
             const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
