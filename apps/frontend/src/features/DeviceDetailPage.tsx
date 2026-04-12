@@ -337,6 +337,14 @@ const DeviceDetailPage: React.FC = () => {
                 return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '} 00:00';
             }
 
+            // Adaptive Beschriftung: Datum + Uhrzeit bei längeren Zeiträumen
+            if (timeRange === 'this_week' || timeRange === 'this_month' || timeRange.includes('d')) {
+                // Nur Datum zeigen, wenn es nicht Mitternacht ist, aber wir über Tage schauen
+                // Eigentlich wollen wir hier HA-Style: Datum bei Tageswechsel, Uhrzeit dazwischen.
+                // Da wir 'time' Achse haben, macht ECharts das oft schon gut, wir erzwingen hier aber Konsistenz.
+                return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+            }
+
             // Standardmäßig die Uhrzeit zeigen
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
           },
@@ -365,30 +373,28 @@ const DeviceDetailPage: React.FC = () => {
 
         const color = getSeriesColor(idx);
         
-        // Counter-Erkennung für Step-Line Darstellung
-        const isCounter = s.entity_id.toLowerCase().includes('starts') || 
-                         s.entity_id.toLowerCase().includes('total') || 
-                         s.entity_id.toLowerCase().includes('count') ||
-                         s.entity_id.toLowerCase().includes('counter') ||
-                         s.entity_id.toLowerCase().includes('zähler') ||
-                         s.entity_id.toLowerCase().includes('zaehler') ||
-                         s.data_kind === 'numeric'; // Alle numerischen als Treppe
+        // Render-Modus vom Backend verwenden
+        const isCounter = s.render_mode === 'history_counter';
+        const isTimeline = s.render_mode === 'state_timeline';
         
         return {
           id: s.entity_id,
           name: s.friendly_name,
           type: 'line',
           showSymbol: false, 
-          step: 'end', // Einheitliche Treppendarstellung für alle numerischen Werte
+          step: (isCounter || isTimeline) ? 'end' : undefined, // Treppe für Counter und Timelines
           smooth: false, 
           connectNulls: false,
           lineStyle: { 
-            width: isCounter ? 2 : 1.5, // Kräftigere Linie für Counter wie HA
+            width: isCounter ? 2 : 1.5,
             color: color,
             opacity: 1
           },
           itemStyle: { color: color },
-          areaStyle: undefined, // Generell keine Fläche für sauberen HA-Look
+          areaStyle: isTimeline ? {
+            color: color,
+            opacity: 0.1
+          } : undefined,
           // Durchgehende Nulllinie für Leistungswerte (Leistung, Strom etc.)
           // Wir verwenden s.value_semantics, um zu entscheiden, ob eine markLine gezeichnet wird.
           markLine: (s.value_semantics === 'instant') ? {

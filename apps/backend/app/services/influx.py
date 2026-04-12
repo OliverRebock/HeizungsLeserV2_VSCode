@@ -245,6 +245,22 @@ class InfluxService:
             
         return "default"
 
+    def _get_render_mode(self, eid: str, data_kind: str) -> str:
+        """
+        Derives the render mode for frontend.
+        - history_counter: For monotonic counters (Treppendarstellung).
+        - history_line: For continuous values (Line chart).
+        - state_timeline: For binary/enum/string states.
+        """
+        lower_eid = eid.lower()
+        if any(kw in lower_eid for kw in ["starts", "total", "count", "counter", "zähler", "zaehler"]):
+            return "history_counter"
+        
+        if data_kind in ("binary", "enum", "string"):
+            return "state_timeline"
+            
+        return "history_line"
+
     def _get_data_kind(self, domain: str, eid: str) -> str:
         """
         Derives data kind from domain and entity id.
@@ -315,12 +331,14 @@ class InfluxService:
                         # Basis-Entität hinzufügen
                         domain = eid.split('.')[0] if '.' in eid else "sensor"
                         data_kind = self._get_data_kind(domain, eid)
+                        render_mode = self._get_render_mode(eid, data_kind)
                         entities.append(Entity(
                             entity_id=eid,
                             domain=domain,
                             friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
                             data_kind=data_kind,
                             value_semantics=self._get_value_semantics(eid),
+                            render_mode=render_mode,
                             chartable=True,
                             source_table="multiple"
                         ))
@@ -564,6 +582,7 @@ class InfluxService:
 
                 data_kind = self._get_data_kind(eid.split('.')[0] if '.' in eid else "sensor", eid)
                 value_semantics = self._get_value_semantics(eid)
+                render_mode = self._get_render_mode(eid, data_kind)
                 
                 results.append(DashboardEntityData(
                     entity_id=eid,
@@ -571,6 +590,7 @@ class InfluxService:
                     domain=eid.split('.')[0] if '.' in eid else "sensor",
                     data_kind=data_kind,
                     value_semantics=value_semantics,
+                    render_mode=render_mode,
                     latest_point=latest_point,
                     sparkline=sparkline_points,
                     is_stale=is_stale,
@@ -728,6 +748,7 @@ class InfluxService:
             unit_of_measurement = None
             data_kind = self._get_data_kind(domain, eid)
             value_semantics = self._get_value_semantics(eid)
+            render_mode = self._get_render_mode(eid, data_kind)
             
             # --- NEU: Vorherigen Wert abfragen (Last known value before start) ---
             # Wir suchen den letzten Punkt VOR dem gewählten Startzeitpunkt
@@ -743,10 +764,8 @@ class InfluxService:
             points = []
 
             # 1. Letzten bekannten Wert vor dem Zeitraum holen
-            # WICHTIG: Für Zähler (Counter) übernehmen wir den letzten bekannten Wert als Startpunkt am linken Rand.
+            # WICHTIG: Für alle Modi übernehmen wir den letzten bekannten Wert als Startpunkt am linken Rand.
             # Das sorgt für die typische horizontale Stufe am Anfang (wie Home Assistant).
-            is_counter = any(kw in eid.lower() for kw in ["starts", "total", "count", "counter", "zähler", "zaehler"])
-            
             try:
                 last_tables = query_api.query(query=last_query)
                 for table in last_tables:
@@ -758,22 +777,19 @@ class InfluxService:
                             try:
                                 num_val = float(val) if isinstance(val, (int, float, bool)) else 0.0
                             except:
-                                num_val = 0.0
+                                try:
+                                    num_val = float(val) if isinstance(val, str) else 0.0
+                                except:
+                                    num_val = 0.0
                             state = str(val)
                             
-                            # WICHTIG: ts muss für die Sortierung RFC3339-kompatibel sein (mit Z)
+                            # ts muss für die Sortierung RFC3339-kompatibel sein (mit Z)
                             fake_ts = start_rfc if "T" in start_rfc else datetime.now(dt_timezone.utc).isoformat().replace('+00:00', 'Z')
                             if "T" in fake_ts and not fake_ts.endswith('Z'):
                                 fake_ts += 'Z'
                                 
-                            if is_counter or data_kind in ("binary", "enum", "string"):
-                                points.append(DataPoint(ts=fake_ts, value=num_val, state=state or "start_padding"))
-                                logger.debug(f"INFLUX_SERVICE: Added START-POINT for {eid} (counter={is_counter}): {val} at {fake_ts}")
-                            else:
-                                # Auch für normale numerische Werte (Temperatur etc.) nehmen wir den Startwert mit,
-                                # wenn er vorhanden ist, um die Linie am Rand anliegen zu lassen.
-                                points.append(DataPoint(ts=fake_ts, value=num_val, state=state or "start_padding"))
-                                logger.debug(f"INFLUX_SERVICE: Added START-POINT for numeric {eid}: {val}")
+                            points.append(DataPoint(ts=fake_ts, value=num_val, state=state or "start_padding"))
+                            logger.debug(f"INFLUX_SERVICE: Added START-POINT for {eid}: {val} at {fake_ts}")
             except Exception as e:
                 logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
 
@@ -837,26 +853,21 @@ class InfluxService:
                             except:
                                 num_val = 0.0
                         
-                        # --- NEU: Gap-Erkennung (Lücken im Messverlauf) ---
-                        # Wenn wir numerische Daten haben und die Lücke zum vorherigen Punkt > 30 Min ist,
-                        # fügen wir einen Null-Punkt (Gap) ein, damit ECharts keine falsche Linie zieht.
-                        # WICHTIG: Für COUNTER (Treppendarstellung) deaktivieren wir die Gap-Logik komplett,
-                        # da eine Treppe durchgehend sein sollte, solange kein neuer Wert kommt.
-                        if data_kind == "numeric" and not is_counter and points:
+                        # --- Gap-Erkennung (Lücken im Messverlauf) ---
+                        # Nur für history_line sinnvoll.
+                        if render_mode == "history_line" and points:
                             try:
                                 last_ts_str = points[-1].ts.replace('Z', '+00:00')
                                 current_ts_str = ts.replace('Z', '+00:00')
                                 dt_prev = datetime.fromisoformat(last_ts_str)
                                 dt_curr = datetime.fromisoformat(current_ts_str)
                                 
-                                if (dt_curr - dt_prev).total_seconds() > 1800: # > 30 Min
-                                    # Wir fügen den Gap-Punkt 1ms nach dem letzten Punkt ein
+                                # In der Detailansicht sind wir bei history_line großzügig (3h wie carry forward)
+                                if (dt_curr - dt_prev).total_seconds() > 10800: 
                                     dt_gap = dt_prev + timedelta(milliseconds=1)
                                     gap_ts = dt_gap.isoformat().replace('+00:00', 'Z')
-                                    # Nur wenn wir nicht schon einen Gap haben
                                     if points[-1].value is not None:
                                         points.append(DataPoint(ts=gap_ts, value=None, state="gap"))
-                                        logger.debug(f"INFLUX_SERVICE: Inserted GAP between points for {eid}")
                             except Exception as e:
                                 logger.error(f"INFLUX_SERVICE: Gap detection error for {eid}: {e}")
 
@@ -874,10 +885,8 @@ class InfluxService:
                     final_end_ts += 'Z'
 
                 # --- UNIFORM CARRY FORWARD LOGIC ---
-                # Alle Punkte (insb. Counter) werden bis zum rechten Rand gezogen, 
-                # wenn der Zeitraum fest definiert ist (nicht "now").
+                # Alle Punkte werden bis zum rechten Rand gezogen.
                 try:
-                    # Filter: Alle Punkte entfernen, die zeitlich NACH dem angeforderten Ende liegen
                     clean_points = [p for p in points if p.state != "gap" and p.value is not None]
                     clean_points.sort(key=lambda x: x.ts)
                     clean_points = [p for p in clean_points if p.ts <= final_end_ts]
@@ -885,15 +894,13 @@ class InfluxService:
                     if clean_points:
                         last_real = clean_points[-1]
                         
-                        # Wenn der letzte echte Punkt vor dem Ende liegt, ziehen wir ihn flach bis zum Rand
                         if last_real.ts < final_end_ts:
-                            # Für Counter (Treppe) ziehen wir den Wert IMMER durch.
-                            # Für normale numerische Werte (Temperatur) prüfen wir auf Timeouts (3h).
-                            if is_counter:
+                            # history_counter und state_timeline werden IMMER durchgezogen (LOCF)
+                            if render_mode in ("history_counter", "state_timeline"):
                                 clean_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
-                                logger.debug(f"INFLUX_SERVICE: Counter carry forward for {eid} to {final_end_ts}")
+                                logger.debug(f"INFLUX_SERVICE: Carry forward ({render_mode}) for {eid} to {final_end_ts}")
                             else:
-                                # Normale numerische Logik (Timeout-Check)
+                                # history_line (Temperaturen etc.) -> 3h Timeout
                                 ts_to_parse = last_real.ts.replace('Z', '+00:00')
                                 dt_last = datetime.fromisoformat(ts_to_parse)
                                 if dt_last.tzinfo is None: dt_last = dt_last.replace(tzinfo=dt_timezone.utc)
@@ -904,13 +911,13 @@ class InfluxService:
                                 if diff_seconds <= 10800: # 3 Stunden
                                     clean_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
                                 else:
-                                    # Timeout -> Drop auf None (Gap) am Ende
+                                    # Timeout -> Drop am Ende
                                     dt_drop = dt_last + timedelta(milliseconds=1)
                                     drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
                                     clean_points.append(DataPoint(ts=drop_ts, value=None, state="timeout"))
                                     clean_points.append(DataPoint(ts=final_end_ts, value=None, state="timeout"))
                         
-                        # Sortieren nach (ts, state_priority) um Start-Padding stabil zu halten
+                        # Sortieren nach (ts, state_priority)
                         points = sorted(clean_points, key=lambda x: (x.ts, 0 if x.state == "start_padding" else 1))
                 except Exception as e:
                     logger.error(f"INFLUX_SERVICE: Carry forward error for {eid}: {e}")
@@ -929,6 +936,7 @@ class InfluxService:
                 domain=domain,
                 data_kind=data_kind,
                 value_semantics=value_semantics,
+                render_mode=render_mode,
                 chartable=True,
                 points=points,
                 meta={
