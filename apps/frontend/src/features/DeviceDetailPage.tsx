@@ -334,11 +334,10 @@ const DeviceDetailPage: React.FC = () => {
             // Wenn wir einen Tageswechsel (Mitternacht) im Sichtfeld haben, zeigen wir dort das Datum fett
             const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
             if (isMidnight) {
-                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '} 00:00';
             }
 
-            // Wenn wir mehr als 36 Stunden sehen, zeigen wir sonst nur die Uhrzeit
-            // (isMidnight wurde oben bereits abgehandelt)
+            // Standardmäßig die Uhrzeit zeigen
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
           },
           rich: {
@@ -490,7 +489,7 @@ const DeviceDetailPage: React.FC = () => {
             const date = new Date(value);
             const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
             if (isMidnight) {
-                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '} 00:00';
             }
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
           },
@@ -603,7 +602,7 @@ const DeviceDetailPage: React.FC = () => {
             const date = new Date(value);
             const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
             if (isMidnight) {
-                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '} 00:00';
             }
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
           },
@@ -682,7 +681,7 @@ const DeviceDetailPage: React.FC = () => {
             const date = new Date(value);
             const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
             if (isMidnight) {
-                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '} 00:00';
             }
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
           },
