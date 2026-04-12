@@ -748,14 +748,15 @@ class InfluxService:
                             # Logik-Entscheidung:
                             if data_kind in ("binary", "enum", "string") or is_counter:
                                 # Für State-History (Binär/Enum) UND COUNTER ist der Startpunkt ESSENZIELL
+                                # Wir nutzen den EXAKTEN Startzeitpunkt des Bereichs (start_rfc)
+                                # Dies erzeugt die HA-typische linke horizontale Stufe.
                                 fake_ts = start_rfc if "T" in start_rfc else datetime.now().isoformat()
                                 points.append(DataPoint(ts=fake_ts, value=num_val, state=state))
-                                logger.debug(f"INFLUX_SERVICE: Added START-PADDING for {data_kind} (counter={is_counter}) entity {eid}: {val}")
+                                logger.debug(f"INFLUX_SERVICE: Added START-POINT for {data_kind} (counter={is_counter}) entity {eid}: {val}")
                             else:
                                 # Für normale NUMERISCHE Werte (Temperaturen etc.): 
                                 # AUF BENUTZERWUNSCH: Wir fügen KEINEN Punkt vor dem Range-Start mehr ein,
                                 # um zu verhindern, dass die X-Achse nach links gedehnt wird.
-                                # Der Punkt wird nur geloggt, aber NICHT in die Serie aufgenommen.
                                 logger.debug(f"INFLUX_SERVICE: Skipping pre-range point for numeric entity {eid} to keep X-axis clean: {val}")
             except Exception as e:
                 logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
@@ -814,28 +815,17 @@ class InfluxService:
                         # --- NEU: Gap-Erkennung (Lücken im Messverlauf) ---
                         # Wenn wir numerische Daten haben und die Lücke zum vorherigen Punkt > 30 Min ist,
                         # fügen wir einen Null-Punkt (Gap) ein, damit ECharts keine falsche Linie zieht.
-                        if data_kind == "numeric" and points:
+                        # WICHTIG: Für COUNTER deaktivieren wir die Gap-Logik komplett.
+                        if data_kind == "numeric" and not is_counter and points:
                             try:
                                 last_ts_str = points[-1].ts.replace('Z', '+00:00')
                                 current_ts_str = ts.replace('Z', '+00:00')
                                 dt_prev = datetime.fromisoformat(last_ts_str)
                                 dt_curr = datetime.fromisoformat(current_ts_str)
                                 
-                                # --- NEU: Padding für Counter-Werte für HA-Style Treppen (Step-Lines) ---
-                                # Für Counter (starts, total, count) fügen wir vor JEDEM neuen Punkt einen
-                                # Zwischenschritt ein (alter Wert bis 1ms vor neuem Zeitstempel),
-                                # damit ECharts IMMER eine saubere Treppe statt einer schrägen Linie zeichnet.
-                                if is_counter and points[-1].value is not None:
-                                    dt_step = dt_curr - timedelta(milliseconds=1)
-                                    step_ts = dt_step.isoformat().replace('+00:00', 'Z')
-                                    points.append(DataPoint(ts=step_ts, value=points[-1].value, state=points[-1].state))
-                                    logger.debug(f"INFLUX_SERVICE: Added Step-Padding for Counter {eid} at {step_ts}")
-                                else:
-                                    dt_step = dt_prev
-
                                 if (dt_curr - dt_prev).total_seconds() > 1800: # > 30 Min
-                                    # Wir fügen den Gap-Punkt 1ms nach dem letzten Punkt ein (oder nach dem Step-Padding)
-                                    dt_gap = dt_step + timedelta(milliseconds=1)
+                                    # Wir fügen den Gap-Punkt 1ms nach dem letzten Punkt ein
+                                    dt_gap = dt_prev + timedelta(milliseconds=1)
                                     gap_ts = dt_gap.isoformat().replace('+00:00', 'Z')
                                     # Nur wenn wir nicht schon einen Gap haben
                                     if points[-1].value is not None:
@@ -911,7 +901,7 @@ class InfluxService:
                                 # Wir prüfen gegen den absoluten JETZT Zeitpunkt, nicht gegen das Graph-Ende,
                                 # um Geisterlinien am aktuellen Rand zu vermeiden.
                                 diff_seconds = (now_utc - dt_last).total_seconds()
-                                if diff_seconds > 900: # 15 * 60
+                                if diff_seconds > 10800: # 3 Stunden (statt 15 Min)
                                     # NEU: Wir fügen einen Punkt direkt beim letzten echten Wert + 1ms ein,
                                     # gefolgt von einem Gap (None) am rechten Rand.
                                     # Das sorgt dafür, dass die blaue Linie am letzten echten Messwert abbricht.
@@ -926,10 +916,10 @@ class InfluxService:
                                     logger.info(f"INFLUX_SERVICE: Instant value {eid} timed out ({int(diff_seconds/60)}m), adding gap (None) at end.")
                             else:
                                 # Wir sind in einer historischen Ansicht (z.B. GESTERN).
-                                # Auch hier: Wenn zwischen dem letzten Punkt und dem Zeitraum-Ende > 15 Min liegen,
+                                # Auch hier: Wenn zwischen dem letzten Punkt und dem Zeitraum-Ende > 3 Stunden liegen,
                                 # lassen wir den Wert auf None (Gap) fallen.
                                 diff_to_end = (dt_end - dt_last).total_seconds()
-                                if diff_to_end > 900:
+                                if diff_to_end > 10800: # 3 Stunden
                                     dt_drop = dt_last + timedelta(milliseconds=1)
                                     drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
                                     points.append(DataPoint(ts=drop_ts, value=last_p.value, state=last_p.state))
@@ -955,7 +945,14 @@ class InfluxService:
                 first_p = points[0]
                 second_p = points[1]
                 
-                if first_p.ts == start_rfc and second_p.ts > first_p.ts:
+                # Wir prüfen ob es ein Start-Punkt ist
+                is_start_rfc = False
+                if first_p.ts == start_rfc:
+                    is_start_rfc = True
+                elif "T" in str(start_rfc) and first_p.ts == start_rfc + "Z":
+                    is_start_rfc = True
+                
+                if is_start_rfc and second_p.ts > first_p.ts:
                     try:
                         # Wir parsen den zweiten Zeitstempel, ziehen 1ms ab
                         # isoformat von record.get_time() hat oft Z oder +00:00

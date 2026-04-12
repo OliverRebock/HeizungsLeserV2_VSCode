@@ -328,18 +328,27 @@ const DeviceDetailPage: React.FC = () => {
           hideOverlap: true,
           formatter: (value: number) => {
             const date = new Date(value);
-            // Adaptives Format: Wenn der Zeitraum groß ist (Woche/Monat), Datum zeigen
             const rangeDays = maxTime && minTime ? (maxTime - minTime) / (1000 * 60 * 60 * 24) : 0;
             
-            if (rangeDays > 2) {
-              return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' + 
-                     date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+            // Wenn wir einen Tageswechsel (Mitternacht) im Sichtfeld haben, zeigen wir dort das Datum fett
+            const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
+            if (isMidnight) {
+                return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '}';
             }
+
+            // Wenn wir mehr als 36 Stunden sehen, zeigen wir sonst nur die Uhrzeit
+            // (isMidnight wurde oben bereits abgehandelt)
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          },
+          rich: {
+            bold: {
+              fontWeight: 'bold',
+              color: '#475569'
+            }
           }
         },
         axisLine: { show: false },
-        splitLine: { show: false } // Weniger technische Linien
+        splitLine: { show: false } 
       },
       yAxis: { 
         type: 'value', 
@@ -378,10 +387,7 @@ const DeviceDetailPage: React.FC = () => {
             opacity: 1
           },
           itemStyle: { color: color },
-          areaStyle: isCounter ? undefined : { // Keine Fläche für Counter
-            opacity: 0.03, // Extrem dezent für normale Reihen
-            color: color
-          },
+          areaStyle: undefined, // Generell keine Fläche für sauberen HA-Look
           // Durchgehende Nulllinie für Leistungswerte (Leistung, Strom etc.)
           // Wir verwenden s.value_semantics, um zu entscheiden, ob eine markLine gezeichnet wird.
           markLine: (s.value_semantics === 'instant') ? {
