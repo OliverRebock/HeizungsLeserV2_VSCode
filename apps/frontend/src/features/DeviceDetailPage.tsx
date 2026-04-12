@@ -169,18 +169,20 @@ const DeviceDetailPage: React.FC = () => {
   const getModalChartOptions = () => {
     if (!modalChartData || !modalChartData.series || modalChartData.series.length === 0) return {};
     const s = modalChartData.series[0];
-    const kind = s.data_kind;
+    const mode = s.render_mode;
     
-    if (kind === 'numeric') {
+    if (mode === 'history_counter' || mode === 'history_line') {
       const unit = (s.meta && (s.meta as any).unit_of_measurement) || '';
       return numericOptions([s], unit);
-    } else if (kind === 'binary') {
-      return binaryOptions([s]);
-    } else if (kind === 'enum') {
-      return enumOptions(s);
-    } else {
+    } else if (mode === 'state_timeline') {
+      // In der Modal-Ansicht können wir je nach data_kind spezifischere Optionen wählen
+      if (s.data_kind === 'binary') return binaryOptions([s]);
+      if (s.data_kind === 'enum') return enumOptions(s);
       return stringOptions(s);
     }
+    
+    // Fallback
+    return numericOptions([s], '');
   };
 
   const getSeriesColor = (index: number) => {
@@ -212,31 +214,16 @@ const DeviceDetailPage: React.FC = () => {
     };
 
     series.forEach((s) => {
-      // WICHTIG: Datentypen strikt nach render_mode trennen
+      // WICHTIG: Gruppierung strikt nach render_mode
       if (s.render_mode === 'history_counter' || s.render_mode === 'history_line') {
         const unit = s.meta?.unit_of_measurement || (s.meta as any)?.unit || '';
         const key = normalizeUnit(unit);
-        console.log(`Processing numeric entity (${s.render_mode}): ${s.entity_id}, Unit: ${unit}, Normalized: ${key}`);
         
         if (!numericGroups.has(key)) numericGroups.set(key, []);
         numericGroups.get(key)!.push(s);
       } else if (s.render_mode === 'state_timeline') {
         // Binär/Enum/String werden jetzt einheitlich als state_timeline behandelt
         if (s.data_kind === 'binary') {
-          binaries.push(s);
-        } else if (s.data_kind === 'enum') {
-          enums.push(s);
-        } else {
-          strings.push(s);
-        }
-      } else {
-        // Fallback für alte Daten/inkonsistente API
-        if (s.data_kind === 'numeric') {
-          const unit = s.meta?.unit_of_measurement || (s.meta as any)?.unit || '';
-          const key = normalizeUnit(unit);
-          if (!numericGroups.has(key)) numericGroups.set(key, []);
-          numericGroups.get(key)!.push(s);
-        } else if (s.data_kind === 'binary') {
           binaries.push(s);
         } else if (s.data_kind === 'enum') {
           enums.push(s);
@@ -343,22 +330,21 @@ const DeviceDetailPage: React.FC = () => {
           hideOverlap: true,
           formatter: (value: number) => {
             const date = new Date(value);
-            
-            // Wenn wir einen Tageswechsel (Mitternacht) im Sichtfeld haben, zeigen wir dort das Datum fett
             const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
+            
+            // Langer Zeitraum Check
+            const isLongRange = timeRange === 'this_week' || timeRange === 'this_month' || timeRange.includes('d') || timeRange.includes('w');
+
             if (isMidnight) {
                 return '{bold|' + date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + '} 00:00';
             }
 
-            // Adaptive Beschriftung: Datum + Uhrzeit bei längeren Zeiträumen
-            if (timeRange === 'this_week' || timeRange === 'this_month' || timeRange.includes('d')) {
-                // Nur Datum zeigen, wenn es nicht Mitternacht ist, aber wir über Tage schauen
-                // Eigentlich wollen wir hier HA-Style: Datum bei Tageswechsel, Uhrzeit dazwischen.
-                // Da wir 'time' Achse haben, macht ECharts das oft schon gut, wir erzwingen hier aber Konsistenz.
-                return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+            if (isLongRange) {
+                // Bei längeren Zeiträumen Datum + Uhrzeit zeigen für bessere Orientierung
+                return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' + 
+                       date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
             }
 
-            // Standardmäßig die Uhrzeit zeigen
             return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
           },
           rich: {

@@ -253,12 +253,15 @@ class InfluxService:
         - state_timeline: For binary/enum/string states.
         """
         lower_eid = eid.lower()
+        # Strenge Erkennung von Countern
         if any(kw in lower_eid for kw in ["starts", "total", "count", "counter", "zähler", "zaehler"]):
             return "history_counter"
         
+        # Alles was nicht numerisch ist, ist eine state_timeline (Bänder)
         if data_kind in ("binary", "enum", "string"):
             return "state_timeline"
             
+        # Standard für Numerik (Temperaturen, Leistung etc.)
         return "history_line"
 
     def _get_data_kind(self, domain: str, eid: str) -> str:
@@ -750,8 +753,7 @@ class InfluxService:
             value_semantics = self._get_value_semantics(eid)
             render_mode = self._get_render_mode(eid, data_kind)
             
-            # --- NEU: Vorherigen Wert abfragen (Last known value before start) ---
-            # Wir suchen den letzten Punkt VOR dem gewählten Startzeitpunkt
+            # 1. Letzten bekannten Wert vor dem Zeitraum holen (für alle Modi als Startpunkt)
             last_query = f'''
                 from(bucket: "{bucket}")
                 |> range(start: 0, stop: {range_start})
@@ -762,174 +764,89 @@ class InfluxService:
             '''
             
             points = []
-
-            # 1. Letzten bekannten Wert vor dem Zeitraum holen
-            # WICHTIG: Für alle Modi übernehmen wir den letzten bekannten Wert als Startpunkt am linken Rand.
-            # Das sorgt für die typische horizontale Stufe am Anfang (wie Home Assistant).
             try:
                 last_tables = query_api.query(query=last_query)
                 for table in last_tables:
                     for record in table.records:
                         val = record.values.get("value")
                         if val is None: val = record.values.get("state")
-                        
                         if val is not None:
                             try:
-                                num_val = float(val) if isinstance(val, (int, float, bool)) else 0.0
-                            except:
-                                try:
-                                    num_val = float(val) if isinstance(val, str) else 0.0
-                                except:
-                                    num_val = 0.0
-                            state = str(val)
-                            
-                            # ts muss für die Sortierung RFC3339-kompatibel sein (mit Z)
-                            fake_ts = start_rfc if "T" in start_rfc else datetime.now(dt_timezone.utc).isoformat().replace('+00:00', 'Z')
-                            if "T" in fake_ts and not fake_ts.endswith('Z'):
-                                fake_ts += 'Z'
-                                
-                            points.append(DataPoint(ts=fake_ts, value=num_val, state=state or "start_padding"))
-                            logger.debug(f"INFLUX_SERVICE: Added START-POINT for {eid}: {val} at {fake_ts}")
+                                num_val = float(val) if isinstance(val, (int, float, bool)) else (float(val) if isinstance(val, str) and val.replace('.','',1).isdigit() else 0.0)
+                            except: num_val = 0.0
+                            points.append(DataPoint(ts=start_rfc, value=num_val, state=str(val)))
             except Exception as e:
-                logger.debug(f"INFLUX_SERVICE: Error during last_query for {eid}: {e}")
+                logger.debug(f"Last value query failed for {eid}: {e}")
 
-            # 2. Hauptabfrage für den Zeitraum
+            # 2. Hauptdaten abrufen
             flux_query = f'''
                 from(bucket: "{bucket}")
                 |> range(start: {range_start}, stop: {range_stop})
                 |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
                 |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state" or r["_field"] == "friendly_name_str" or r["_field"] == "unit_of_measurement_str")
                 |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-                |> keep(columns: ["_time", "value", "state", "_measurement", "entity_id", "friendly_name_str", "domain", "unit_of_measurement_str"])
             '''
-            
-            logger.debug(f"INFLUX_SERVICE: EXECUTING FLUX QUERY for {eid}:\n{flux_query}")
             
             try:
                 tables = query_api.query(query=flux_query)
                 for table in tables:
                     for record in table.records:
                         ts = record.get_time().isoformat().replace('+00:00', 'Z')
-                        if "T" in ts and not ts.endswith('Z'):
-                            ts += 'Z'
-                        
                         val = record.values.get("value")
                         if val is None: val = record.values.get("state")
                         
+                        # Metadata extraction
                         if record.values.get("friendly_name_str"):
                             friendly_name = self._clean_friendly_name(record.values.get("friendly_name_str"))
-                        if record.values.get("domain"):
-                            domain = record.values.get("domain")
                         if record.values.get("unit_of_measurement_str"):
                             unit_of_measurement = str(record.values.get("unit_of_measurement_str"))
-                        elif not unit_of_measurement and record.values.get("_measurement"):
-                            m = str(record.values.get("_measurement"))
-                            if len(m) <= 5 or any(c in m for c in ['°', '%']):
-                                unit_of_measurement = m
-                            
-                        num_val = 0.0
-                        state = str(val) if val is not None else ""
-                        
-                        if isinstance(val, (int, float)):
-                            num_val = float(val)
-                        elif isinstance(val, bool):
-                            num_val = 1.0 if val else 0.0
-                            state = "on" if val else "off"
-                        elif isinstance(val, str):
-                            state = val
-                            # Mapping for binary-like strings to numeric values for charts
-                            try:
-                                low_val = val.lower()
-                                if low_val in ['on', 'true', 'online', 'active', 'heating', 'an']:
-                                    num_val = 1.0
-                                elif low_val in ['off', 'false', 'offline', 'idle', 'inactive', 'aus']:
-                                    num_val = 0.0
-                                else:
-                                    # Versuch als float zu parsen, falls es eine Zahl als String ist
-                                    try:
-                                        num_val = float(val)
-                                    except:
-                                        num_val = 0.0
-                            except:
-                                num_val = 0.0
-                        
-                        # --- Gap-Erkennung (Lücken im Messverlauf) ---
-                        # Nur für history_line sinnvoll.
-                        if render_mode == "history_line" and points:
-                            try:
-                                last_ts_str = points[-1].ts.replace('Z', '+00:00')
-                                current_ts_str = ts.replace('Z', '+00:00')
-                                dt_prev = datetime.fromisoformat(last_ts_str)
-                                dt_curr = datetime.fromisoformat(current_ts_str)
-                                
-                                # In der Detailansicht sind wir bei history_line großzügig (3h wie carry forward)
-                                if (dt_curr - dt_prev).total_seconds() > 10800: 
-                                    dt_gap = dt_prev + timedelta(milliseconds=1)
-                                    gap_ts = dt_gap.isoformat().replace('+00:00', 'Z')
-                                    if points[-1].value is not None:
-                                        points.append(DataPoint(ts=gap_ts, value=None, state="gap"))
-                            except Exception as e:
-                                logger.error(f"INFLUX_SERVICE: Gap detection error for {eid}: {e}")
 
-                        points.append(DataPoint(ts=ts, value=num_val, state=state))
+                        if val is not None:
+                            try:
+                                num_val = float(val) if isinstance(val, (int, float, bool)) else (float(val) if isinstance(val, str) and val.replace('.','',1).isdigit() else 0.0)
+                            except: num_val = 0.0
+                            points.append(DataPoint(ts=ts, value=num_val, state=str(val)))
             except Exception as e:
-                logger.warning(f"INFLUX_SERVICE: Query error for {eid}: {e}")
-                
-            # 3. Carry Forward zum Endzeitpunkt
+                logger.warning(f"Query failed for {eid}: {e}")
+
+            # 3. Pipeline-spezifische Nachbearbeitung
             if points:
-                # Wir bestimmen das absolute Ende als ISO-String mit 'Z'
-                final_end_ts = end_rfc
-                if not isinstance(final_end_ts, str) or "T" not in str(final_end_ts):
-                    final_end_ts = datetime.now(dt_timezone.utc).isoformat().replace('+00:00', 'Z')
-                if "T" in final_end_ts and not final_end_ts.endswith('Z'):
-                    final_end_ts += 'Z'
-
-                # --- UNIFORM CARRY FORWARD LOGIC ---
-                # Alle Punkte werden bis zum rechten Rand gezogen.
-                try:
-                    clean_points = [p for p in points if p.state != "gap" and p.value is not None]
-                    clean_points.sort(key=lambda x: x.ts)
-                    clean_points = [p for p in clean_points if p.ts <= final_end_ts]
+                points.sort(key=lambda x: x.ts)
+                final_end_ts = resolved_to
+                
+                if render_mode == "history_counter":
+                    # STRENGER COUNTER: Letzter echter Wert bis zum Rand ziehen
+                    last_real = points[-1]
+                    points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
+                
+                elif render_mode == "state_timeline":
+                    # STRENGER STATE: Immer LOCF bis zum Rand
+                    last_real = points[-1]
+                    points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
+                
+                else: # history_line
+                    # 3-STUNDEN LOCF / GAP LOGIK
+                    processed_points = []
+                    for i in range(len(points)):
+                        processed_points.append(points[i])
+                        if i < len(points) - 1:
+                            # Gap Detection (3h)
+                            t1 = datetime.fromisoformat(points[i].ts.replace('Z', '+00:00'))
+                            t2 = datetime.fromisoformat(points[i+1].ts.replace('Z', '+00:00'))
+                            if (t2 - t1).total_seconds() > 10800:
+                                processed_points.append(DataPoint(ts=(t1 + timedelta(seconds=1)).isoformat().replace('+00:00', 'Z'), value=None, state="gap"))
                     
-                    if clean_points:
-                        last_real = clean_points[-1]
-                        
-                        if last_real.ts < final_end_ts:
-                            # history_counter und state_timeline werden IMMER durchgezogen (LOCF)
-                            if render_mode in ("history_counter", "state_timeline"):
-                                clean_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
-                                logger.debug(f"INFLUX_SERVICE: Carry forward ({render_mode}) for {eid} to {final_end_ts}")
-                            else:
-                                # history_line (Temperaturen etc.) -> 3h Timeout
-                                ts_to_parse = last_real.ts.replace('Z', '+00:00')
-                                dt_last = datetime.fromisoformat(ts_to_parse)
-                                if dt_last.tzinfo is None: dt_last = dt_last.replace(tzinfo=dt_timezone.utc)
-                                
-                                now_utc = datetime.now(dt_timezone.utc)
-                                diff_seconds = (now_utc - dt_last).total_seconds()
-                                
-                                if diff_seconds <= 10800: # 3 Stunden
-                                    clean_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
-                                else:
-                                    # Timeout -> Drop am Ende
-                                    dt_drop = dt_last + timedelta(milliseconds=1)
-                                    drop_ts = dt_drop.isoformat().replace('+00:00', 'Z')
-                                    clean_points.append(DataPoint(ts=drop_ts, value=None, state="timeout"))
-                                    clean_points.append(DataPoint(ts=final_end_ts, value=None, state="timeout"))
-                        
-                        # Sortieren nach (ts, state_priority)
-                        points = sorted(clean_points, key=lambda x: (x.ts, 0 if x.state == "start_padding" else 1))
-                except Exception as e:
-                    logger.error(f"INFLUX_SERVICE: Carry forward error for {eid}: {e}")
-                    points.sort(key=lambda p: p.ts)
+                    # Carry forward am Ende (3h)
+                    last_real = processed_points[-1]
+                    if last_real.value is not None:
+                        t_last = datetime.fromisoformat(last_real.ts.replace('Z', '+00:00'))
+                        t_end = datetime.fromisoformat(final_end_ts.replace('Z', '+00:00'))
+                        if (t_end - t_last).total_seconds() <= 10800:
+                            processed_points.append(DataPoint(ts=final_end_ts, value=last_real.value, state=last_real.state))
+                        else:
+                            processed_points.append(DataPoint(ts=(t_last + timedelta(seconds=1)).isoformat().replace('+00:00', 'Z'), value=None, state="timeout"))
+                    points = processed_points
 
-            # --- ENTFERNT: Altes Double Padding am Anfang ---
-            # Wir verlassen uns auf den Startpunkt bei Start-RFC und step: 'end' im Frontend.
-            # Das zusätzliche Padding vor jedem Punkt wurde bereits früher entfernt.
-
-            logger.debug(f"INFLUX_SERVICE: Found {len(points)} points for {eid} (incl. padding)")
-            
-            data_kind = self._get_data_kind(domain, eid)
             results.append(TimeSeriesResponse(
                 entity_id=eid,
                 friendly_name=friendly_name,
