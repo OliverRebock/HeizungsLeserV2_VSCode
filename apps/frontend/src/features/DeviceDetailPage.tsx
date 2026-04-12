@@ -424,7 +424,7 @@ const DeviceDetailPage: React.FC = () => {
       tooltip: { 
         trigger: 'axis', 
         confine: true,
-        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.05)', width: 1 }, z: 10 },
+        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.1)', width: 1 }, z: 10 },
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
@@ -543,7 +543,7 @@ const DeviceDetailPage: React.FC = () => {
       tooltip: { 
         trigger: 'axis', 
         confine: true,
-        axisPointer: { type: 'cross', z: 10 },
+        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.1)', width: 1 }, z: 10 },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
@@ -577,7 +577,7 @@ const DeviceDetailPage: React.FC = () => {
       tooltip: { 
         trigger: 'axis', 
         confine: true,
-        axisPointer: { type: 'cross', z: 10 },
+        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.1)', width: 1 }, z: 10 },
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         borderColor: '#e2e8f0',
         borderWidth: 1,
