@@ -457,8 +457,7 @@ const DeviceDetailPage: React.FC = () => {
                                p.dataIndex === series.points.length - 1;
 
             const val = p.data[1];
-            const isAn = val === 1 || val === (p.seriesIndex + 1) || (typeof val === 'number' && val > (seriesList.length - params.indexOf(p) - 1));
-            const label = val % 1 === 0 ? 'An' : 'Aus'; // Basic heuristic for row-mapped binary values
+            // label and isAn are removed as they are unused, replaced by direct logic in template
             
             res += `<div class="flex items-center justify-between gap-6 py-0.5">
                       <div class="flex items-center gap-2">
