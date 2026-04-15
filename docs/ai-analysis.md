@@ -4,15 +4,15 @@ Dieses Dokument beschreibt die Implementierung und Funktionsweise der gerätebez
 
 ## Übersicht
 
-Die KI-Analyse ermöglicht eine datenbasierte Bewertung des Betriebszustands einer Heizung oder Wärmepumpe. Sie nutzt OpenAI (GPT-5.4), um Muster, Anomalien und Optimierungspotenziale in den Zeitreihendaten zu erkennen.
+Die KI-Analyse ermöglicht eine datenbasierte Bewertung des Betriebszustands einer Heizung oder Wärmepumpe. Sie nutzt OpenAI (GPT-5.3), um Muster, Anomalien und Optimierungspotenziale in den Zeitreihendaten zu erkennen.
 
 ### Fehlercode-Interpretation (Schritt 7B/C Optimierung)
 
 Ein Kernfeature der Analyse ist die automatische Erkennung und Interpretation von Fehlercodes:
 - **Priorisierung:** Fehlerrelevante Entitäten (z.B. `last_error_code`, `fault`, `alarm`, `status`, `störung`, `meldung`) werden im `HeatingSummaryService` immer bevorzugt behandelt und an die KI gesendet, auch wenn sie nicht explizit vom Benutzer ausgewählt wurden.
 - **Fehler-Extraktion (Deep Analysis):** Das Backend extrahiert mittels Regex gezielt Fehlercodes aus unstrukturierten Strings (z.B. `(5140)`) und stellt diese der KI in einer separaten Liste `detected_errors` zur Verfügung.
-- **Mustererkennung:** Die KI (GPT-5.4) ist speziell darauf trainiert, diese vor-identifizierten Fehlercodes als höchste Priorität zu behandeln. Sie erkennt die technische Fehlernummer und den zeitlichen Bezug.
-- **Gewichtung:** Im System-Prompt für GPT-5.4 ist festgelegt, dass Fehlercodes und Alarmmeldungen die stärkste Gewichtung in der Analyse erfahren müssen.
+- **Mustererkennung:** Die KI (GPT-5.3) ist speziell darauf trainiert, diese vor-identifizierten Fehlercodes als höchste Priorität zu behandeln. Sie erkennt die technische Fehlernummer und den zeitlichen Bezug.
+- **Gewichtung:** Im System-Prompt für GPT-5.3 ist festgelegt, dass Fehlercodes und Alarmmeldungen die stärkste Gewichtung in der Analyse erfahren müssen.
 
 ### Funktionsweise
 
@@ -54,8 +54,8 @@ Die KI-Analyse wurde für eine präzisere Fehlererkennung und verbesserte Handha
    - Fehler werden automatisch in `historical` (mit `--` oder `last` im Namen) und `active` klassifiziert.
 
 3. **Error Candidates & Gewichtung**:
-   - Das Backend identifiziert vorab `error_candidates` und hebt diese im Prompt für GPT-5.4 hervor.
-   - GPT-5.4 ist angewiesen, historische Fehler von aktiven Störungen zu unterscheiden und Diagnosen vorsichtig zu formulieren ("Historischer Fehlerhinweis erkannt, aktive Störung aktuell nicht sicher belegt").
+   - Das Backend identifiziert vorab `error_candidates` und hebt diese im Prompt für GPT-5.3 hervor.
+   - GPT-5.3 ist angewiesen, historische Fehler von aktiven Störungen zu unterscheiden und Diagnosen vorsichtig zu formulieren ("Historischer Fehlerhinweis erkannt, aktive Störung aktuell nicht sicher belegt").
 
 4. **Debugging & Traceability**:
    - Jede Analyse erhält eine eindeutige `analysis_run_id`.
@@ -82,7 +82,7 @@ Siehe `DeepAnalysisResponse` Schema.
 Folgende Variablen müssen in der `.env` gesetzt sein:
 
 *   `OPENAI_API_KEY`: Dein OpenAI API Key.
-*   `OPENAI_MODEL_PRIMARY`: Aktuell auf `gpt-5.4` konfiguriert.
+*   `OPENAI_MODEL_PRIMARY`: Aktuell auf `gpt-5.3` konfiguriert.
 *   `OPENAI_TIMEOUT_SECONDS`: Timeout für den API-Aufruf (Standard: 60s).
 *   `OPENAI_ANALYSIS_ENABLED`: Muss auf `true` stehen.
 

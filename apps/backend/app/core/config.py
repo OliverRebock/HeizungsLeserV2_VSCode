@@ -44,7 +44,7 @@ class Settings(BaseSettings):
 
     # OpenAI
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL_PRIMARY: str = "gpt-4o"
+    OPENAI_MODEL_PRIMARY: str = "gpt-5.3"
     OPENAI_TIMEOUT_SECONDS: int = 60
     OPENAI_ANALYSIS_ENABLED: bool = False
 

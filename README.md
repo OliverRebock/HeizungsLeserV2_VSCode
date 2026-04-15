@@ -7,7 +7,7 @@ Heizungsleser V2 ist eine hochmoderne, mandantenfähige Plattform zur **Echtzeit
 ## 🌟 Warum Heizungsleser V2? (Vorteile)
 
 *   **Effizienzsteigerung:** Identifizieren Sie unnötiges Takten und suboptimale Heizkurven, bevor sie zu hohen Stromrechnungen führen.
-*   **KI-Expertise auf Knopfdruck:** Nutzen Sie die Power von OpenAI (GPT-4o), um komplexe Temperaturverläufe wie ein erfahrener Heizungstechniker interpretieren zu lassen.
+*   **KI-Expertise auf Knopfdruck:** Nutzen Sie die Power von OpenAI (GPT-5.3), um komplexe Temperaturverläufe wie ein erfahrener Heizungstechniker interpretieren zu lassen.
 *   **Mandantensicherheit (Multi-Tenancy):** Entwickelt für Dienstleister. Verwalten Sie hunderte Kunden in einer einzigen Oberfläche bei strikter Datentrennung.
 *   **Herstellerunabhängig:** Durch die Anbindung an InfluxDB werden Daten verschiedenster Hersteller (Viessmann, Vaillant, Wolf, Buderus etc.) einheitlich verarbeitet.
 *   **Zukunftssicher:** Modernster Tech-Stack (FastAPI, React, InfluxDB 2), der auf Performance und Skalierbarkeit ausgelegt ist.
@@ -30,7 +30,7 @@ Verwandeln Sie Datenfriedhöfe in Erkenntnisse:
 *   **Interaktive Charts:** Analyse von Zeitreihendaten zur Optimierung von Schaltzyklen und Modulationsgraden.
 
 ### 3. KI-Analyse & Deep Analysis
-Das Herzstück der Anwendung basiert auf OpenAI GPT-4o:
+Das Herzstück der Anwendung basiert auf OpenAI GPT-5.3:
 *   **KI-Analyse (Zusammenfassung):** Generiert auf Knopfdruck einen verständlichen Bericht über den aktuellen Betriebszustand basierend auf den Zeitreihendaten der letzten Stunden/Tage.
 *   **Deep Analysis (Technische Diagnose):** Eine vertiefte Analyse, die spezifische Anomalien identifiziert, Effizienzwerte bewertet und konkrete Optimierungsvorschläge (z. B. Anpassung der Heizkurve) liefert.
 *   **Mustererkennung:** Die KI erkennt ineffizientes Verhalten wie "Taktung" oder "Pendeln", das in reinen Tabellen oft übersehen wird.
@@ -50,7 +50,7 @@ Professionelles Management für Fachbetriebe:
 | **Datenbank (Meta)** | PostgreSQL | Verwaltung von Benutzern, Rollen und Mandantenstrukturen. |
 | **Datenbank (Time)** | InfluxDB 2.x | Optimiert für Zeitreihendaten (aktuelle Zielplattform). |
 | **Frontend** | React / TypeScript | Moderne Oberfläche auf Port 3001 (via Docker). |
-| **KI-Integration** | OpenAI GPT-4o | Intelligente Dateninterpretation und Diagnostik. |
+| **KI-Integration** | OpenAI GPT-5.3 | Intelligente Dateninterpretation und Diagnostik. |
 | **Infrastruktur** | Docker Compose | Orchestrierung von Backend, Frontend und Postgres. |
 
 ---
