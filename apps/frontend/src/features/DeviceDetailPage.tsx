@@ -141,11 +141,25 @@ const DeviceDetailPage: React.FC = () => {
     );
   };
 
+  const isBinaryLikeEntity = (entity: Entity) => {
+    if (entity.data_kind === 'binary') {
+      return true;
+    }
+
+    // Generic fallback for two-state timelines represented as enum/string
+    if (entity.render_mode === 'state_timeline' && Array.isArray(entity.options)) {
+      const distinctOptions = new Set(entity.options.map((option) => option?.trim()).filter(Boolean));
+      return distinctOptions.size > 0 && distinctOptions.size <= 2;
+    }
+
+    return false;
+  };
+
   const toggleDashboard = async (entity: Entity) => {
     if (!deviceId) return;
     
     let type: 'value' | 'status' | 'mini-chart' = 'value';
-    if (entity.data_kind === 'binary') type = 'status';
+    if (isBinaryLikeEntity(entity)) type = 'status';
     else if (entity.chartable) type = 'mini-chart';
 
     const item: any = {
@@ -216,26 +230,241 @@ const DeviceDetailPage: React.FC = () => {
     };
   };
 
-  const getPointAtAxis = (series: TimeSeries, axisTime: number) => {
-    const sortedPoints = [...series.points].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-    let currentPoint = sortedPoints[0];
+  const isActualPoint = (point: TimeSeries['points'][number]) => point.is_actual !== false;
 
-    for (const point of sortedPoints) {
-      if (new Date(point.ts).getTime() > axisTime) {
-        break;
-      }
-      currentPoint = point;
-    }
-
-    return currentPoint;
+  const getNumericPoints = (series: TimeSeries, includeSynthetic = false) => {
+    return [...series.points]
+      .filter(point => (includeSynthetic || isActualPoint(point)) && point.value !== null && point.value !== undefined)
+      .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
   };
 
-  const formatTimelineStateLabel = (series: TimeSeries, point?: TimeSeries['points'][number]) => {
-    if (!point) return 'Keine Daten';
-    if (series.data_kind === 'binary') {
-      return point.value ? 'An' : 'Aus';
+  const hasRenderableSeries = (series: TimeSeries) => {
+    if (series.render_mode === 'state_timeline') {
+      return series.points.length > 0;
     }
-    return point.state || 'Keine Daten';
+
+    const numericPoints = getNumericPoints(series, series.render_mode === 'history_counter');
+    return numericPoints.length > 0;
+  };
+
+  const isInstantLikeNumericSeries = (series: TimeSeries) => {
+    if (series.render_mode === 'history_counter') {
+      return false;
+    }
+
+    const deviceClass = (series.device_class || series.meta?.device_class || '').trim().toLowerCase();
+    const unit = (series.unit_of_measurement || series.meta?.unit_of_measurement || '').trim().toLowerCase();
+    const stateClass = (series.state_class || series.meta?.state_class || '').trim().toLowerCase();
+
+    const instantDeviceClasses = new Set([
+      'apparent_power',
+      'current',
+      'current_phase',
+      'frequency',
+      'power',
+      'power_factor',
+      'reactive_power',
+      'signal_strength',
+      'speed',
+      'voltage',
+      'volume_flow_rate',
+      'wind_speed',
+    ]);
+
+    const statefulDeviceClasses = new Set([
+      'aqi',
+      'atmospheric_pressure',
+      'battery',
+      'carbon_dioxide',
+      'carbon_monoxide',
+      'distance',
+      'duration',
+      'energy',
+      'energy_storage',
+      'gas',
+      'humidity',
+      'illuminance',
+      'irradiance',
+      'moisture',
+      'monetary',
+      'nitrogen_dioxide',
+      'nitrogen_monoxide',
+      'nitrous_oxide',
+      'ozone',
+      'pm1',
+      'pm10',
+      'pm25',
+      'precipitation',
+      'precipitation_intensity',
+      'pressure',
+      'temperature',
+      'volatile_organic_compounds',
+      'volume',
+      'volume_storage',
+      'water',
+      'weight',
+    ]);
+
+    const instantUnits = new Set(['a', 'hz', 'kw', 'l/h', 'm3/h', 'ma', 'mw', 'rpm', 'v', 'va', 'var', 'w']);
+    const statefulUnits = new Set(['%', '°c', 'bar', 'c', 'kwh', 'l', 'm3', 'psi', 'wh']);
+
+    if (instantDeviceClasses.has(deviceClass)) {
+      return true;
+    }
+
+    if (statefulDeviceClasses.has(deviceClass)) {
+      return false;
+    }
+
+    if (stateClass === 'measurement') {
+      if (instantUnits.has(unit)) {
+        return true;
+      }
+
+      if (statefulUnits.has(unit)) {
+        return false;
+      }
+
+      return true;
+    }
+
+    if (series.value_semantics === 'instant') {
+      return true;
+    }
+
+    if (series.value_semantics === 'stateful') {
+      return false;
+    }
+
+    return false;
+  };
+
+  const isHeldValueSeries = (series: TimeSeries) => {
+    return series.render_mode === 'history_counter' || isInstantLikeNumericSeries(series);
+  };
+
+  const buildNumericSeriesData = (
+    series: TimeSeries,
+  ) => {
+    const numericPoints = getNumericPoints(series, true);
+    const seriesData: Array<[number, number | null]> = [];
+
+    numericPoints.forEach((point, index) => {
+      const pointTime = new Date(point.ts).getTime();
+      const pointValue = point.value ?? null;
+
+      if (index === 0) {
+        seriesData.push([pointTime, pointValue]);
+        return;
+      }
+
+      const previousPoint = numericPoints[index - 1];
+      const previousValue = previousPoint.value ?? null;
+
+      if (isHeldValueSeries(series)) {
+        seriesData.push([pointTime, previousValue]);
+        seriesData.push([pointTime, pointValue]);
+        return;
+      }
+
+      seriesData.push([pointTime, pointValue]);
+    });
+
+    return seriesData;
+  };
+
+  const buildNumericGapData = (
+    series: TimeSeries,
+    rangeResolved?: DeviceDataResponse['range_resolved'],
+  ) => {
+    const numericPoints = getNumericPoints(series, true);
+    const { minTime, maxTime } = getRangeBounds(rangeResolved);
+    const gapSegments: Array<[number, number]> = [];
+    const gapData: Array<[number, number | null]> = [];
+
+    const addGapSegment = (start: number, end: number) => {
+      if (!(end > start)) return;
+      gapSegments.push([start, end]);
+      if (gapData.length > 0) {
+        gapData.push([start, null]);
+      }
+      gapData.push([start, 0], [end, 0], [end, null]);
+    };
+
+    if (numericPoints.length === 0) {
+      if (minTime !== undefined && maxTime !== undefined && maxTime > minTime) {
+        addGapSegment(minTime, maxTime);
+      }
+      return { gapData, gapSegments };
+    }
+
+    const firstTime = new Date(numericPoints[0].ts).getTime();
+    const lastTime = new Date(numericPoints[numericPoints.length - 1].ts).getTime();
+
+    if (minTime !== undefined && firstTime > minTime) {
+      addGapSegment(minTime, firstTime);
+    }
+
+    if (maxTime !== undefined && lastTime < maxTime) {
+      addGapSegment(lastTime, maxTime);
+    }
+
+    return { gapData, gapSegments };
+  };
+
+  const isAxisInGap = (axisTime: number, gapSegments: Array<[number, number]>) => {
+    return gapSegments.some(([start, end]) => axisTime >= start && axisTime <= end);
+  };
+
+  const getNumericValueAtAxis = (
+    series: TimeSeries,
+    axisTime: number,
+    gapSegments: Array<[number, number]>,
+  ) => {
+    const numericPoints = getNumericPoints(series, true);
+
+    if (numericPoints.length === 0 || isAxisInGap(axisTime, gapSegments)) {
+      return null;
+    }
+
+    const firstTime = new Date(numericPoints[0].ts).getTime();
+    const lastTime = new Date(numericPoints[numericPoints.length - 1].ts).getTime();
+
+    if (axisTime < firstTime || axisTime > lastTime) {
+      return null;
+    }
+
+    for (let index = 0; index < numericPoints.length; index += 1) {
+      const point = numericPoints[index];
+      const pointTime = new Date(point.ts).getTime();
+
+      if (pointTime === axisTime) {
+        return point.value ?? null;
+      }
+
+      const nextPoint = numericPoints[index + 1];
+      if (!nextPoint) {
+        continue;
+      }
+
+      const nextTime = new Date(nextPoint.ts).getTime();
+      if (axisTime > pointTime && axisTime < nextTime) {
+        if (isHeldValueSeries(series)) {
+          return point.value ?? null;
+        }
+
+        const currentValue = point.value;
+        const nextValue = nextPoint.value;
+        if (currentValue === null || currentValue === undefined || nextValue === null || nextValue === undefined) {
+          return null;
+        }
+
+        const ratio = (axisTime - pointTime) / (nextTime - pointTime);
+        return currentValue + (nextValue - currentValue) * ratio;
+      }
+    }
+
+    return numericPoints[numericPoints.length - 1]?.value ?? null;
   };
 
   const buildPanels = (seriesList: TimeSeries[]) => {
@@ -254,7 +483,7 @@ const DeviceDetailPage: React.FC = () => {
     };
 
     seriesList
-      .filter(series => series && series.entity_id && series.points.length > 0)
+      .filter(series => series && series.entity_id)
       .forEach((series) => {
         if (series.render_mode === 'history_counter' || series.render_mode === 'history_line') {
           const unitKey = normalizeUnit(getSeriesUnit(series));
@@ -288,6 +517,20 @@ const DeviceDetailPage: React.FC = () => {
     rangeKey: string,
     rangeResolved?: DeviceDataResponse['range_resolved']
   ) => {
+    const preparedSeries = seriesList.map((series, index) => {
+      const color = getSeriesColor(index);
+      const seriesData = buildNumericSeriesData(series);
+      const { gapData, gapSegments } = buildNumericGapData(series, rangeResolved);
+
+      return {
+        series,
+        color,
+        seriesData,
+        gapData,
+        gapSegments,
+      };
+    });
+
     return {
       tooltip: { 
         trigger: 'axis', 
@@ -307,30 +550,23 @@ const DeviceDetailPage: React.FC = () => {
           const axisParams = Array.isArray(params) ? params.filter((entry: any) => entry.componentType === 'series') : [];
           if (axisParams.length === 0) return '';
 
-          const uniqueParams: any[] = [];
-          const seenSeries = new Set<string>();
-          axisParams.forEach((entry: any) => {
-            const key = String(entry.seriesId || entry.seriesName);
-            if (seenSeries.has(key)) return;
-            seenSeries.add(key);
-            uniqueParams.push(entry);
-          });
-
           let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${axisParams[0].axisValueLabel}</div>`;
+          const axisTime = typeof axisParams[0].axisValue === 'number'
+            ? axisParams[0].axisValue
+            : new Date(axisParams[0].axisValue).getTime();
 
-          uniqueParams.forEach((entry: any) => {
-            const series = seriesList.find(item => item.entity_id === entry.seriesId) || seriesList.find(item => item.friendly_name === entry.seriesName);
-            const unit = series ? getSeriesUnit(series, unitLabel) : unitLabel;
-            const rawValue = entry.data?.[1];
+          preparedSeries.forEach((entry) => {
+            const unit = getSeriesUnit(entry.series, unitLabel);
+            const rawValue = getNumericValueAtAxis(entry.series, axisTime, entry.gapSegments);
             const formattedValue = typeof rawValue === 'number'
-              ? rawValue.toLocaleString('de-DE', { maximumFractionDigits: 2 })
-              : '—';
+              ? `${rawValue.toLocaleString('de-DE', { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''}`
+              : 'Keine Daten';
             res += `<div class="flex items-center justify-between gap-6 py-0.5">
                       <div class="flex items-center gap-2">
                         <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${entry.color};"></span>
-                        <span class="text-slate-600 font-medium">${entry.seriesName}</span>
+                        <span class="text-slate-600 font-medium">${entry.series.friendly_name}</span>
                       </div>
-                      <span class="font-bold text-slate-900">${formattedValue}${unit ? ` ${unit}` : ''}</span>
+                      <span class="font-bold text-slate-900">${formattedValue}</span>
                     </div>`;
           });
 
@@ -356,200 +592,317 @@ const DeviceDetailPage: React.FC = () => {
         axisLine: { show: false },
         splitLine: { lineStyle: { color: '#f1f5f9' } }
       },
-      series: seriesList.map((s, idx) => {
-        const sortedPoints = [...s.points].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-        const seriesData = sortedPoints.map(p => [new Date(p.ts).getTime(), p.value ?? null]);
-
-        const color = getSeriesColor(idx);
-        const isCounter = s.render_mode === 'history_counter';
-
-        return {
-          id: s.entity_id,
-          name: s.friendly_name,
-          type: 'line',
-          showSymbol: false, 
-          step: isCounter ? 'end' : false,
-          smooth: false, 
-          connectNulls: false,
-          lineStyle: { 
-            width: isCounter ? 2 : 1.5,
-            color: color,
-            opacity: 1
+      series: preparedSeries.flatMap((entry) => {
+        return [
+          {
+            id: `${entry.series.entity_id}__gap`,
+            name: entry.series.friendly_name,
+            type: 'line',
+            tooltip: { show: false },
+            silent: true,
+            showSymbol: false,
+            connectNulls: false,
+            z: 1,
+            lineStyle: {
+              width: 1.5,
+              color: entry.color,
+              opacity: 0.45,
+              type: 'dashed',
+            },
+            data: entry.gapData,
           },
-          itemStyle: { color: color },
-          data: seriesData
-        };
+          {
+            id: entry.series.entity_id,
+            name: entry.series.friendly_name,
+            type: 'line',
+            showSymbol: false, 
+            step: false,
+            smooth: false, 
+            connectNulls: false,
+            z: 3,
+            lineStyle: { 
+              width: entry.series.render_mode === 'history_counter' ? 2 : 1.5,
+              color: entry.color,
+              opacity: 1
+            },
+            itemStyle: { color: entry.color },
+            data: entry.seriesData
+          }
+        ];
       })
+    };
+  };
+
+  // ──────────────────────────────────────────────────────────────
+  // HA-style State-Timeline: coloured segments with inline labels
+  // ──────────────────────────────────────────────────────────────
+
+  /** Stable colour palette per unique state label (like HA's default) */
+  const STATE_PALETTE: Record<string, string> = {
+    // binary / on-off
+    'an': '#22c55e',
+    'on': '#22c55e',
+    'active': '#22c55e',
+    'heating': '#ef4444',
+    'heizen': '#ef4444',
+    'aus': '#e2e8f0',
+    'off': '#e2e8f0',
+    'inactive': '#e2e8f0',
+    'idle': '#94a3b8',
+    'standby': '#94a3b8',
+    'cooling': '#3b82f6',
+    'kühlen': '#3b82f6',
+    'defrost': '#8b5cf6',
+    'defrost abtauen': '#8b5cf6',
+    'error': '#f97316',
+    'fehler': '#f97316',
+  };
+
+  const STATE_FALLBACK_COLORS = [
+    '#6366f1', '#0ea5e9', '#f59e0b', '#10b981',
+    '#ec4899', '#14b8a6', '#f97316', '#a78bfa',
+  ];
+
+  const stateColorCache = new Map<string, string>();
+
+  const getStateColor = (label: string): string => {
+    const key = label.toLowerCase().trim();
+    if (STATE_PALETTE[key]) return STATE_PALETTE[key];
+    if (stateColorCache.has(key)) return stateColorCache.get(key)!;
+    const color = STATE_FALLBACK_COLORS[stateColorCache.size % STATE_FALLBACK_COLORS.length];
+    stateColorCache.set(key, color);
+    return color;
+  };
+
+  const getStateTextColor = (bg: string): string => {
+    // simple luminance check: use dark text on light backgrounds
+    const hex = bg.replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.60 ? '#374151' : '#ffffff';
+  };
+
+  /**
+   * Converts a sorted point list into closed segments:
+   * [{start, end, label}]
+   * The last segment is extended to `rangeEnd` (now).
+   */
+  const buildStateSegments = (
+    series: TimeSeries,
+    rangeResolved?: DeviceDataResponse['range_resolved'],
+  ) => {
+    const { maxTime } = getRangeBounds(rangeResolved);
+    const rangeEnd = maxTime ?? Date.now();
+
+    const sorted = [...series.points]
+      .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+    if (sorted.length === 0) return [] as Array<{ start: number; end: number; label: string }>;
+
+    const segments: Array<{ start: number; end: number; label: string }> = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      const pt = sorted[i];
+      const start = new Date(pt.ts).getTime();
+      const end = i < sorted.length - 1
+        ? new Date(sorted[i + 1].ts).getTime()
+        : rangeEnd;
+
+      const label = series.data_kind === 'binary'
+        ? (pt.value ? 'an' : 'aus')
+        : (pt.state || String(pt.value ?? ''));
+
+      if (end > start) {
+        segments.push({ start, end, label });
+      }
+    }
+
+    return segments;
+  };
+
+  /**
+   * One HA-style state-bar chart for one or many series.
+   * Each series gets its own labelled row.
+   */
+  const stateBarOptions = (
+    seriesList: TimeSeries[],
+    rangeKey: string,
+    rangeResolved?: DeviceDataResponse['range_resolved'],
+  ) => {
+    const { minTime, maxTime } = getRangeBounds(rangeResolved);
+    const BAR_HEIGHT = 28;   // px per row
+    const ROW_GAP = 8;       // px between rows
+    const LABEL_PX = 140;    // left label column width
+
+    const rows = seriesList.map((series) => ({
+      series,
+      segments: buildStateSegments(series, rangeResolved),
+    }));
+
+    const totalRows = rows.length;
+    const chartHeight = totalRows * (BAR_HEIGHT + ROW_GAP) + 24; // +24 for bottom axis
+
+    // custom render function passed to ECharts
+    const renderItem = (_params: any, api: any) => {
+      const rowIndex: number = api.value(0);
+      const segStart: number = api.value(1);
+      const segEnd: number = api.value(2);
+      const label: string = api.value(3);
+
+      const startCoord = api.coord([segStart, rowIndex]);
+      const endCoord = api.coord([segEnd, rowIndex]);
+
+      const x = startCoord[0];
+      const y = startCoord[1] - BAR_HEIGHT / 2;
+      const width = Math.max(endCoord[0] - startCoord[0], 1);
+      const height = BAR_HEIGHT;
+
+      const bg = getStateColor(label);
+      const fg = getStateTextColor(bg);
+
+      // only show label if segment is wide enough (≥30px)
+      const showLabel = width >= 30;
+
+      return {
+        type: 'group',
+        children: [
+          {
+            type: 'rect',
+            shape: { x, y, width, height, r: 3 },
+            style: { fill: bg, stroke: 'none' },
+            z2: 1,
+          },
+          ...(showLabel ? [{
+            type: 'text',
+            style: {
+              text: label,
+              x: x + width / 2,
+              y: y + height / 2,
+              textAlign: 'center',
+              textVerticalAlign: 'middle',
+              fill: fg,
+              fontSize: 11,
+              fontWeight: '600',
+              fontFamily: 'inherit',
+              overflow: 'truncate',
+              width: width - 6,
+            },
+            z2: 2,
+          }] : []),
+        ],
+      };
+    };
+
+    // flatten all rows into one data array: [rowIndex, start, end, label]
+    const data: [number, number, number, string][] = [];
+    rows.forEach((row, rowIdx) => {
+      row.segments.forEach((seg) => {
+        data.push([rowIdx, seg.start, seg.end, seg.label]);
+      });
+    });
+
+    const yAxisLabels = rows.map((r) => r.series.friendly_name);
+
+    return {
+      _stateBarChartHeight: chartHeight,
+      tooltip: {
+        trigger: 'item',
+        confine: true,
+        backgroundColor: 'rgba(255,255,255,0.98)',
+        borderColor: '#e2e8f0',
+        borderWidth: 1,
+        textStyle: { color: '#1e293b', fontSize: 12 },
+        extraCssText: 'box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);border-radius:8px;padding:10px;',
+        formatter: (params: any) => {
+          if (!params?.data) return '';
+          const [rowIdx, segStart, segEnd, label] = params.data as [number, number, number, string];
+          const name = yAxisLabels[rowIdx] ?? '';
+          const dur = segEnd - segStart;
+          const mins = Math.round(dur / 60000);
+          const durStr = mins >= 60
+            ? `${Math.floor(mins / 60)}h ${mins % 60}min`
+            : `${mins} min`;
+          const bg = getStateColor(label);
+          return `<div style="font-size:11px;font-weight:700;color:#64748b;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">${name}</div>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${bg};"></span>
+                    <span style="font-weight:700;font-size:13px;color:#0f172a">${label}</span>
+                  </div>
+                  <div style="color:#94a3b8;font-size:11px;margin-top:4px">
+                    ${new Date(segStart).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                    → ${new Date(segEnd).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                    · ${durStr}
+                  </div>`;
+        },
+      },
+      grid: {
+        left: LABEL_PX,
+        right: 12,
+        top: 6,
+        bottom: 28,
+        containLabel: false,
+      },
+      xAxis: {
+        type: 'time',
+        min: minTime,
+        max: maxTime,
+        boundaryGap: false,
+        splitLine: { show: true, lineStyle: { color: '#f1f5f9' } },
+        axisLine: { show: false },
+        axisLabel: {
+          color: '#94a3b8',
+          fontSize: 10,
+          hideOverlap: true,
+          formatter: (value: number) => formatTimeAxisLabel(value, rangeKey),
+        },
+      },
+      yAxis: {
+        type: 'value',
+        min: -0.5,
+        max: totalRows - 0.5,
+        interval: 1,
+        inverse: false,
+        axisLabel: {
+          show: true,
+          color: '#374151',
+          fontSize: 11,
+          fontWeight: 600,
+          width: LABEL_PX - 12,
+          overflow: 'truncate',
+          formatter: (value: number) => {
+            const idx = Math.round(value);
+            return yAxisLabels[idx] ?? '';
+          },
+        },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+      },
+      series: [
+        {
+          type: 'custom',
+          renderItem,
+          encode: { x: [1, 2], y: 0 },
+          data,
+          z: 2,
+        },
+      ],
     };
   };
 
   const binaryTimelineOptions = (
     seriesList: TimeSeries[],
     rangeKey: string,
-    rangeResolved?: DeviceDataResponse['range_resolved']
-  ) => {
-    return {
-      tooltip: { 
-        trigger: 'axis', 
-        confine: true,
-        axisPointer: { 
-          type: 'line', 
-          lineStyle: { color: '#cbd5e1', width: 1 }, 
-          z: 10 
-        },
-        backgroundColor: 'rgba(255, 255, 255, 0.98)',
-        borderColor: '#e2e8f0',
-        borderWidth: 1,
-        textStyle: { color: '#1e293b', fontSize: 12 },
-        extraCssText: 'box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border-radius: 8px; padding: 10px;',
-        formatter: (params: any) => {
-          const axisParams = Array.isArray(params) ? params : [];
-          if (axisParams.length === 0) return '';
-
-          const axisTime = typeof axisParams[0].axisValue === 'number'
-            ? axisParams[0].axisValue
-            : new Date(axisParams[0].axisValue).getTime();
-
-          let res = `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${axisParams[0].axisValueLabel}</div>`;
-
-          seriesList.forEach((series, index) => {
-            const point = getPointAtAxis(series, axisTime);
-            res += `<div class="flex items-center justify-between gap-6 py-0.5">
-                      <div class="flex items-center gap-2">
-                        <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${getSeriesColor(index)};"></span>
-                        <span class="text-slate-600 font-medium">${series.friendly_name}</span>
-                      </div>
-                      <span class="font-bold text-slate-900">${formatTimelineStateLabel(series, point)}</span>
-                    </div>`;
-          });
-
-          return res;
-        }
-      },
-      grid: { 
-        left: 120,
-        right: '3%', 
-        bottom: 30, 
-        top: 10, 
-        containLabel: false 
-      },
-      xAxis: {
-        ...buildTimeAxis(rangeKey, rangeResolved),
-        splitLine: { show: true, lineStyle: { color: '#f8fafc' } }
-      },
-      yAxis: { 
-        type: 'value',
-        min: 0,
-        max: seriesList.length,
-        interval: 1,
-        axisLabel: { 
-          show: true,
-          color: '#64748b',
-          fontSize: 10,
-          fontWeight: 600,
-          formatter: (value: number) => {
-            if (value <= 0 || value > seriesList.length) return '';
-            const s = seriesList[seriesList.length - Math.round(value)];
-            return s?.friendly_name || '';
-          }
-        },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        splitLine: { 
-          show: true, 
-          lineStyle: { color: '#f1f5f9', type: 'dashed' } 
-        }
-      },
-      series: seriesList.map((s, idx) => {
-        // We invert the index so the first entity is at the top
-        const rowIdx = seriesList.length - idx;
-        const color = getSeriesColor(idx);
-        
-        return {
-          id: s.entity_id,
-          name: s.friendly_name,
-          type: 'line',
-          step: 'end',
-          showSymbol: false,
-          connectNulls: false,
-          lineStyle: { width: 0 }, // Hide the line
-          areaStyle: {
-            color: color,
-            opacity: 0.8,
-            origin: 'start'
-          },
-          data: [...s.points]
-            .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
-            .map(p => [new Date(p.ts).getTime(), p.value ? rowIdx : rowIdx - 0.95])
-        };
-      })
-    };
-  };
+    rangeResolved?: DeviceDataResponse['range_resolved'],
+  ) => stateBarOptions(seriesList, rangeKey, rangeResolved);
 
   const categoricalTimelineOptions = (
     series: TimeSeries,
     rangeKey: string,
-    rangeResolved?: DeviceDataResponse['range_resolved']
-  ) => {
-    const categories = Array.from(new Set([
-      ...(series.points.map(point => point.state).filter(Boolean) as string[]),
-      ...(series.meta?.options || []),
-    ]));
-    const color = getSeriesColor(0);
-
-    return {
-      tooltip: { 
-        trigger: 'axis', 
-        confine: true,
-        axisPointer: { 
-          type: 'line', 
-          lineStyle: { color: '#cbd5e1', width: 1 }, 
-          z: 10 
-        },
-        backgroundColor: 'rgba(255, 255, 255, 0.95)',
-        borderColor: '#e2e8f0',
-        borderWidth: 1,
-        padding: [8, 12],
-        textStyle: { color: '#1e293b', fontSize: 12 },
-        extraCssText: 'shadow-md rounded-lg border border-slate-200',
-        formatter: (params: any) => {
-          const axisParams = Array.isArray(params) ? params : [];
-          if (axisParams.length === 0) return '';
-          const axisTime = typeof axisParams[0].axisValue === 'number'
-            ? axisParams[0].axisValue
-            : new Date(axisParams[0].axisValue).getTime();
-          const point = getPointAtAxis(series, axisTime);
-
-          return `<div class="font-bold text-slate-500 text-[10px] mb-1.5 uppercase tracking-wider">${axisParams[0].axisValueLabel}</div>
-                  <div class="flex items-center justify-between gap-6 py-0.5">
-                    <div class="flex items-center gap-2">
-                      <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background-color:${color};"></span>
-                      <span class="text-slate-600 font-medium">${series.friendly_name}</span>
-                    </div>
-                    <span class="font-bold text-slate-900">${formatTimelineStateLabel(series, point)}</span>
-                  </div>`;
-        }
-      },
-      grid: { left: '3%', right: '3%', bottom: 30, top: 10, containLabel: true },
-      xAxis: buildTimeAxis(rangeKey, rangeResolved),
-      yAxis: { type: 'category', data: categories, axisLabel: { color: '#94a3b8', fontSize: 10 } },
-      series: [
-        {
-          id: series.entity_id,
-          name: series.friendly_name,
-          type: 'line',
-          step: 'end',
-          showSymbol: false,
-          connectNulls: false,
-          lineStyle: { width: 10, color, opacity: 0.9 },
-          itemStyle: { color },
-          data: [...series.points]
-            .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
-            .map(p => [new Date(p.ts).getTime(), p.state || ''])
-        }
-      ]
-    };
-  };
+    rangeResolved?: DeviceDataResponse['range_resolved'],
+  ) => stateBarOptions([series], rangeKey, rangeResolved);
 
   const stateTimelineOptions = (
     seriesList: TimeSeries[],
@@ -571,6 +924,14 @@ const DeviceDetailPage: React.FC = () => {
     }
 
     return numericOptions([series], getSeriesUnit(series), modalTimeRange, modalChartData.range_resolved);
+  };
+
+  const hasRenderableModalSeries = () => {
+    if (!modalChartData?.series?.[0]) {
+      return false;
+    }
+
+    return hasRenderableSeries(modalChartData.series[0]);
   };
 
   const onChartReadySetGroup = (instance: any) => {
@@ -1058,35 +1419,41 @@ const DeviceDetailPage: React.FC = () => {
                         ))}
 
                         {/* Binär gemeinsam */}
-                        {chartPanels.binaryStates.length > 0 && (
-                          <div 
-                            className="border-b border-slate-50 pb-6 last:border-0 last:pb-0"
-                            style={{ height: `${Math.max(150, chartPanels.binaryStates.length * 45 + 80)}px` }}
-                          >
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Status-Verlauf (An/Aus)</div>
-                            <ReactECharts
-                              option={stateTimelineOptions(chartPanels.binaryStates, timeRange, chartData.range_resolved)}
-                              style={{ height: '100%', width: '100%' }}
-                              notMerge={true}
-                              lazyUpdate={true}
-                              onChartReady={onChartReadySetGroup}
-                            />
-                          </div>
-                        )}
+                        {chartPanels.binaryStates.length > 0 && (() => {
+                          const h = Math.max(72, chartPanels.binaryStates.length * 36 + 34);
+                          return (
+                            <div
+                              className="border-b border-slate-50 pb-4 last:border-0 last:pb-0"
+                              style={{ height: `${h + 22}px` }}
+                            >
+                              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Status-Verlauf (An/Aus)</div>
+                              <ReactECharts
+                                option={stateTimelineOptions(chartPanels.binaryStates, timeRange, chartData.range_resolved)}
+                                style={{ height: `${h}px`, width: '100%' }}
+                                notMerge={true}
+                                lazyUpdate={true}
+                                onChartReady={onChartReadySetGroup}
+                              />
+                            </div>
+                          );
+                        })()}
 
                         {/* Weitere State-Timelines, je Entität eigenes Panel */}
-                        {chartPanels.categoricalStates.map((s: TimeSeries, i: number) => (
-                          <div key={`state-${s.entity_id}-${i}`} className="h-[220px] border-b border-slate-50 pb-6 last:border-0 last:pb-0">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Zustand: {s.friendly_name}</div>
-                            <ReactECharts
-                              option={stateTimelineOptions([s], timeRange, chartData.range_resolved)}
-                              style={{ height: '100%', width: '100%' }}
-                              notMerge={true}
-                              lazyUpdate={true}
-                              onChartReady={onChartReadySetGroup}
-                            />
-                          </div>
-                        ))}
+                        {chartPanels.categoricalStates.map((s: TimeSeries, i: number) => {
+                          const h = 62; // 1 row = 28px bar + gaps + axis
+                          return (
+                            <div key={`state-${s.entity_id}-${i}`} className="border-b border-slate-50 pb-4 last:border-0 last:pb-0" style={{ height: `${h + 22}px` }}>
+                              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Zustand: {s.friendly_name}</div>
+                              <ReactECharts
+                                option={stateTimelineOptions([s], timeRange, chartData.range_resolved)}
+                                style={{ height: `${h}px`, width: '100%' }}
+                                notMerge={true}
+                                lazyUpdate={true}
+                                onChartReady={onChartReadySetGroup}
+                              />
+                            </div>
+                          );
+                        })}
                       </>
                     ) : (
                       <div className="h-[400px] flex flex-col items-center justify-center text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
@@ -1177,21 +1544,28 @@ const DeviceDetailPage: React.FC = () => {
             {dashboardItems.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {dashboardItems.map(item => {
+                  const ent = entities?.find(e => e.entity_id === item.id);
+                  const effectiveType: 'value' | 'status' | 'mini-chart' = (() => {
+                    if (!ent) return item.type;
+                    if (isBinaryLikeEntity(ent)) return 'status';
+                    if (ent.render_mode === 'state_timeline') return 'mini-chart';
+                    if (ent.chartable) return 'mini-chart';
+                    return 'value';
+                  })();
+
                   const props = {
-                    key: item.id,
                     deviceId: deviceId!,
                     entityId: item.id,
                     title: item.title,
                     onRemove: () => removeFromDashboard(item.id),
                     onClick: () => {
-                      const ent = entities?.find(e => e.entity_id === item.id);
                       if (ent) setSelectedEntityForModal(ent);
                     }
                   };
 
-                  if (item.type === 'status') return <StatusWidget {...props} />;
-                  if (item.type === 'mini-chart') return <MiniChartWidget {...props} />;
-                  return <ValueWidget {...props} />;
+                  if (effectiveType === 'status') return <StatusWidget key={item.id} {...props} />;
+                  if (effectiveType === 'mini-chart') return <MiniChartWidget key={item.id} {...props} />;
+                  return <ValueWidget key={item.id} {...props} />;
                 })}
               </div>
             ) : (
@@ -1263,13 +1637,16 @@ const DeviceDetailPage: React.FC = () => {
                 </div>
 
                 {/* Chart Area */}
+                {(() => {
+                  const isStateBar = modalChartData?.series?.[0]?.render_mode === 'state_timeline';
+                  // 1 row needs: top(6) + bar(28) + gap(8) + bottom(28) = 70px chart, +16px headroom
+                  const chartH = isStateBar ? 86 : 350;
+                  // container adds p-4 = 16px top + 16px bottom = 32px
+                  const containerH = isStateBar ? chartH + 32 : chartH;
+                  return (
                 <div 
                   className="bg-slate-50 rounded-2xl border border-slate-100 p-4 relative overflow-hidden transition-all duration-300"
-                  style={{ 
-                    height: modalChartData?.series?.[0]?.render_mode === 'state_timeline'
-                      ? (modalChartData?.series?.[0]?.data_kind === 'binary' ? '220px' : '260px')
-                      : '350px'
-                  }}
+                  style={{ height: `${containerH}px` }}
                 >
                   {isModalChartLoading ? (
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white/50 backdrop-blur-[2px] z-10">
@@ -1278,10 +1655,10 @@ const DeviceDetailPage: React.FC = () => {
                     </div>
                   ) : null}
                   
-                  {modalChartData?.series && modalChartData.series[0]?.points.length > 0 ? (
+                  {hasRenderableModalSeries() ? (
                     <ReactECharts
                       option={getModalChartOptions()}
-                      style={{ height: '100%', width: '100%' }}
+                      style={{ height: `${chartH}px`, width: '100%' }}
                       notMerge={true}
                     />
                   ) : !isModalChartLoading ? (
@@ -1301,6 +1678,8 @@ const DeviceDetailPage: React.FC = () => {
                     </div>
                   ) : null}
                 </div>
+                  );
+                })()}
 
                 {/* Info Footer */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

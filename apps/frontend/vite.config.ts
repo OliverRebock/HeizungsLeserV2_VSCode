@@ -25,5 +25,20 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true, // Nötig für Docker
+    allowedHosts: ['rebockbigtest'],
+    proxy: {
+      '/api': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+      },
+    },
+    strictPort: true,
+    watch: {
+      usePolling: true,
+      interval: 300,
+    },
+    hmr: {
+      clientPort: 3001,
+    },
   }
 })

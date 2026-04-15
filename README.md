@@ -84,10 +84,10 @@ Dies stoppt die Container, baut die Images ohne Cache neu und startet das System
 3.  **System starten (via Docker Compose):**
     Starten Sie alle Dienste (Backend, Frontend, PostgreSQL) mit einem Befehl:
     ```bash
-    docker-compose -f infra/docker-compose.yml up -d --build
+    docker compose -f infra/docker-compose.yml up -d --build
     ```
 4.  **Initialer Login & Zugriff:**
-    *   **Frontend:** `http://localhost:3001` (Standard-Port für die Weboberfläche)
+    *   **Frontend:** `http://localhost:3001` (Vite-Dev-Server mit Live-Reload im lokalen Docker-Setup)
     *   **Backend API (Swagger):** `http://localhost:8000/docs`
     *   **Initialer Superuser:**
         *   Benutzer: `admin@example.com` (konfigurierbar via `FIRST_SUPERUSER`)

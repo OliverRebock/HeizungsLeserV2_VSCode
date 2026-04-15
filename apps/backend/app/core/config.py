@@ -1,5 +1,11 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = BACKEND_ROOT.parent.parent if BACKEND_ROOT.parent.name == "apps" else BACKEND_ROOT
+ENV_FILES = tuple(str(path) for path in dict.fromkeys((BACKEND_ROOT / ".env", REPO_ROOT / ".env")))
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Heizungsleser V2"
@@ -43,7 +49,7 @@ class Settings(BaseSettings):
     OPENAI_ANALYSIS_ENABLED: bool = False
 
     model_config = SettingsConfigDict(
-        env_file="../.env",
+        env_file=ENV_FILES,
         case_sensitive=True,
         extra="ignore"
     )

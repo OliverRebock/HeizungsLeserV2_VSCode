@@ -29,12 +29,26 @@ class OpenAIService:
             candidates = summary_data["error_candidates"]
             error_candidates_str = "WICHTIG: Folgende FEHLER-KANDIDATEN wurden in den Rohdaten identifiziert:\n"
             for cand in candidates:
-                error_candidates_str += f"- Code: {cand['parsed_code']} (Typ: {cand['classification']}, Quelle: {cand['label']}, Rohwert: {cand['raw_value']})\n"
+                seen_from = cand.get("first_seen_at")
+                seen_to = cand.get("last_seen_at")
+                seen_count = cand.get("seen_count")
+                seen_text = ""
+                if seen_from and seen_to and seen_from != seen_to:
+                    seen_text = f", gesehen von {seen_from} bis {seen_to}"
+                elif seen_from or seen_to:
+                    seen_text = f", gesehen am {seen_from or seen_to}"
+                if seen_count and int(seen_count) > 1:
+                    seen_text += f" ({seen_count} Messpunkte)"
+
+                error_candidates_str += (
+                    f"- Code: {cand['parsed_code']} "
+                    f"(Typ: {cand['classification']}, Quelle: {cand['label']}, Rohwert: {cand['raw_value']}{seen_text})\n"
+                )
             logger.info(f"[{run_id}] Identified {len(candidates)} error candidates for OpenAI analysis.")
 
         system_prompt = f"""
 Du bist ein Senior-Experte für Heizungssysteme und Wärmepumpen mit Spezialisierung auf technische Datenanalyse und Fehlerdiagnostik.
-Deine Aufgabe ist es, die bereitgestellten Heizungsdaten eines konkreten Geräts tiefgreifend zu analysieren.
+Deine Aufgabe ist es, die bereitgestellten Heizungsdaten eines konkreten Geräts so zu analysieren, dass ein Heizungsbauer beim Kunden schnell eine brauchbare erste Antwort erhält.
 
 FACHLICHE PRIORITÄT (KRITISCH):
 1. FEHLERCODES & ALARME: Suche gezielt nach Fehlernummern und Alarmmeldungen.
@@ -47,11 +61,15 @@ Richtlinien für deine Analyse:
 - Bewerte den Gesamtzustand. Wenn historische Fehler vorliegen, aber aktuell alles stabil ist, formuliere vorsichtig: "Historischer Fehlerhinweis erkannt, aktive Störung aktuell nicht sicher belegt".
 - Benenne Fehlercodes explizit.
 - Wenn keine Fehlercodes gefunden werden, analysiere Effizienz und Taktverhalten.
+- Antworte kurz, direkt und praxisnah.
+- Die Zusammenfassung soll maximal 2 kurze Sätze umfassen.
+- Nenne höchstens 3 Findings, höchstens 2 Anomalien, höchstens 2 Optimierungshinweise und höchstens 3 Follow-up-Checks.
+- `should_trigger_error_analysis` nur auf `true` setzen, wenn eine vertiefte Ursachenanalyse für eine kritische oder unklare Störung wirklich sinnvoll ist.
 - Antworte strukturiert in {language} im JSON-Format.
 
 JSON-Struktur der Antwort:
 {{
-  "summary": "Zusammenfassung unter Fokus auf Fehlercodes (historisch/aktiv) und Betriebszustand",
+  "summary": "Kurze Zusammenfassung in maximal 2 Sätzen",
   "overall_status": "Status (optimal, unauffällig, beobachtungswürdig, auffällig, kritisch)",
   "detected_error_codes": [
     {{
@@ -59,7 +77,10 @@ JSON-Struktur der Antwort:
       "label": "Klartextmeldung / Typ",
       "source_entity": "Entity-ID",
       "source_label": "Sensorname",
-      "observed_value": "Rohwert"
+      "observed_value": "Rohwert",
+      "first_seen_at": "Wann im ausgewählten Zeitraum zuerst gesehen",
+      "last_seen_at": "Wann im ausgewählten Zeitraum zuletzt gesehen",
+      "seen_count": 1
     }}
   ],
   "findings": [
@@ -71,8 +92,8 @@ JSON-Struktur der Antwort:
     }}
   ],
   "anomalies": [{{ "title": "Anomalie", "description": "Beschreibung" }}],
-  "optimization_hints": ["Optimierungshinweis"],
-  "recommended_followup_checks": ["Prüfschritte für den Techniker"],
+  "optimization_hints": ["Nur sofort hilfreiche Hinweise"],
+  "recommended_followup_checks": ["Kurze Prüfschritte für den Techniker"],
   "confidence": "low/medium/high",
   "should_trigger_error_analysis": true/false
 }}
@@ -170,13 +191,15 @@ Richtlinien:
 2. Suche nach zeitlichen Korrelationen zwischen Fehlern und Betriebszuständen (z.B. Fehler tritt immer bei Verdichterstart auf).
 3. Erstelle eine Liste von konkreten diagnostischen Schritten, die ein Techniker vor Ort durchführen sollte.
 4. Nenne vermutete Ursachen mit Angabe der Wahrscheinlichkeit.
-5. Antworte in {language}.
-6. Nutze das vorgegebene JSON-Format.
+5. Antworte kompakt und priorisiere nur die technisch wichtigsten Punkte.
+6. Verwende maximal 2 kurze Sätze für `technical_summary`, maximal 3 `suspected_causes`, maximal 5 `diagnostic_steps` und maximal 3 `technical_findings`.
+7. Antworte in {language}.
+8. Nutze das vorgegebene JSON-Format.
 
 JSON-Struktur der Antwort:
 {{
-  "technical_summary": "Technische Zusammenfassung der Situation",
-  "diagnostic_steps": ["Schritt 1", "Schritt 2"],
+  "technical_summary": "Kurze technische Zusammenfassung in maximal 2 Sätzen",
+  "diagnostic_steps": ["Kurzer Schritt 1", "Kurzer Schritt 2"],
   "suspected_causes": ["Ursache A (hohe Wahrscheinlichkeit)", "Ursache B"],
   "technical_findings": [
     {{

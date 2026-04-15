@@ -1,0 +1,12 @@
+
+Timestamp           Check                   Status Detail
+---------           -----                   ------ ------
+2026-04-15T13:36:14 Compose file exists     PASS   infra/docker-compose.yml
+2026-04-15T13:36:14 docker compose ps       PASS   NAME                   …
+2026-04-15T13:36:14 Backend container up    PASS   heizungsleser-v2-backend
+2026-04-15T13:36:14 Frontend container up   PASS   heizungsleser-v2-fronte…
+2026-04-15T13:36:14 DB container healthy/up PASS   heizungsleser-v2-postgr…
+2026-04-15T13:36:14 Backend health endpoint PASS   HTTP 200
+2026-04-15T13:36:14 Frontend root endpoint  PASS   HTTP 200
+
+

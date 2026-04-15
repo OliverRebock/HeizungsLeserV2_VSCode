@@ -63,6 +63,7 @@ export interface TimeSeriesPoint {
   ts: string;
   value?: number | null;
   state?: string;
+  is_actual?: boolean;
 }
 
 export interface TimeSeries {
@@ -114,6 +115,9 @@ export interface DashboardEntityData {
   data_kind: string;
   value_semantics?: string;
   render_mode: string;
+  state_class?: string;
+  device_class?: string;
+  unit_of_measurement?: string;
   latest_point?: DashboardDataPoint;
   sparkline: DashboardDataPoint[];
   is_stale: boolean;
@@ -148,6 +152,9 @@ export interface DetectedErrorCode {
   source_entity: string;
   source_label: string;
   observed_value: string;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  seen_count?: number;
 }
 
 export interface DeepAnalysisResponse {
@@ -160,6 +167,8 @@ export interface DeepAnalysisResponse {
   suspected_causes: string[];
   technical_findings: AnalysisFinding[];
   confidence: string;
+  analysis_mode: string;
+  analysis_notice?: string | null;
   disclaimer: string;
 }
 
@@ -170,6 +179,9 @@ export interface ErrorCandidate {
   parsed_code?: string;
   classification: string;
   confidence: string;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  seen_count?: number;
 }
 
 export interface AnalysisResponse {
@@ -187,6 +199,8 @@ export interface AnalysisResponse {
   recommended_followup_checks: string[];
   confidence: string;
   should_trigger_error_analysis: boolean;
+  analysis_mode: string;
+  analysis_notice?: string | null;
   disclaimer: string;
   raw_summary?: any;
   deep_analysis_result?: DeepAnalysisResponse;

@@ -2,35 +2,36 @@ services:
   backend:
     container_name: heizungsleser-v2-backend
     build:
-      context: ../apps/backend
+      context: ./backend
       dockerfile: Dockerfile
     restart: always
     ports:
       - "8000:8000"
-    volumes:
-      - ../apps/backend:/app
+    environment:
+      DATABASE_URL: postgresql://heitleser_user:heitleser_pass@heizungsleser-v2-postgres:5432/heitleser_db
     env_file:
-      - ../.env
+      - .env
     depends_on:
       db:
         condition: service_healthy
     networks:
       - heizungsleser-v2-net
+      - proxy
 
   db:
     container_name: heizungsleser-v2-postgres
     image: postgres:16-alpine
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-heitleser_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heitleser_pass}
-      POSTGRES_DB: ${POSTGRES_DB:-heitleser_db}
+      POSTGRES_USER: heitleser_user
+      POSTGRES_PASSWORD: heitleser_pass
+      POSTGRES_DB: heitleser_db
     ports:
       - "5432:5432"
     volumes:
       - heizungsleser-v2-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-heitleser_user} -d ${POSTGRES_DB:-heitleser_db}"]
+      test: ["CMD-SHELL", "pg_isready -U heitleser_user -d heitleser_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -40,30 +41,26 @@ services:
   frontend:
     container_name: heizungsleser-v2-frontend
     build:
-      context: ../apps/frontend
+      context: ./frontend
       dockerfile: Dockerfile
-      target: dev
     restart: always
     ports:
-      - "3001:3000"
-    volumes:
-      - ../apps/frontend:/app
-      - heizungsleser-v2-frontend-node-modules:/app/node_modules
+      - "3001:80"
     environment:
       VITE_API_BASE_URL: /api/v1
-      CHOKIDAR_USEPOLLING: "true"
     depends_on:
       - backend
     networks:
       - heizungsleser-v2-net
+      - proxy
 
 networks:
   heizungsleser-v2-net:
     name: heizungsleser-v2-net
     driver: bridge
+  proxy:
+    external: true
 
 volumes:
   heizungsleser-v2-postgres-data:
     name: heizungsleser-v2-postgres-data
-  heizungsleser-v2-frontend-node-modules:
-    name: heizungsleser-v2-frontend-node-modules

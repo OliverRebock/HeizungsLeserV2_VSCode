@@ -33,6 +33,9 @@ class DashboardEntityData(BaseModel):
     data_kind: str
     value_semantics: str = "default"
     render_mode: str = "history_line"
+    state_class: Optional[str] = None
+    device_class: Optional[str] = None
+    unit_of_measurement: Optional[str] = None
     latest_point: Optional[DashboardDataPoint] = None
     sparkline: List[DashboardDataPoint] = []
     is_stale: bool = False
@@ -46,6 +49,7 @@ class DataPoint(BaseModel):
     ts: str
     value: Optional[float] = None
     state: Optional[str] = None
+    is_actual: bool = True
 
 class TimeSeriesResponse(BaseModel):
     entity_id: str

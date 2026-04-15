@@ -17,6 +17,8 @@ const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
+  const [showDetailMenuButton, setShowDetailMenuButton] = React.useState(true);
+  const lastScrollTopRef = React.useRef(0);
 
   const handleLogout = () => {
     logout();
@@ -25,21 +27,13 @@ const AppLayout: React.FC = () => {
 
   const isAdmin = user?.is_superuser || user?.tenants?.some(t => t.role === 'platform_admin') || user?.email === 'admin@example.com';
   const isTenantAdmin = user?.tenants?.some(t => t.role === 'tenant_admin');
-  
-  console.log('Current User Permissions:', { 
-    email: user?.email, 
-    is_superuser: user?.is_superuser, 
-    tenants: user?.tenants,
-    isAdmin, 
-    isTenantAdmin 
-  });
 
   const isDeviceDetail = location.pathname.startsWith('/devices/');
 
   const navItems = [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard },
     { label: 'Geräte', path: '/devices', icon: Database },
-    { label: 'KI-Analyse (Beta)', path: '/analysis', icon: Brain },
+    { label: 'KI-Schnellcheck (Beta)', path: '/analysis', icon: Brain },
   ];
 
   if (isAdmin || isTenantAdmin) {
@@ -56,6 +50,31 @@ const AppLayout: React.FC = () => {
     if (currentNavItem) return currentNavItem.label;
     if (location.pathname === '/tenants') return 'Kundenverwaltung';
     return 'Heizungsleser V2';
+  };
+
+  React.useEffect(() => {
+    // Reset button visibility when route changes or mobile menu state changes.
+    setShowDetailMenuButton(true);
+    lastScrollTopRef.current = 0;
+  }, [location.pathname, isMobileMenuOpen]);
+
+  const handleMainScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    if (!isDeviceDetail || isMobileMenuOpen) {
+      return;
+    }
+
+    const currentTop = event.currentTarget.scrollTop;
+    const previousTop = lastScrollTopRef.current;
+
+    if (currentTop <= 16) {
+      setShowDetailMenuButton(true);
+    } else if (currentTop > previousTop + 8) {
+      setShowDetailMenuButton(false);
+    } else if (currentTop < previousTop - 8) {
+      setShowDetailMenuButton(true);
+    }
+
+    lastScrollTopRef.current = currentTop;
   };
 
   return (
@@ -85,7 +104,7 @@ const AppLayout: React.FC = () => {
 
         <div className="p-4 border-t border-slate-800">
           <div className="px-4 py-1 mb-2">
-            <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">v2.4.18-stable</p>
+            <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">v2.4.29-stable</p>
           </div>
           <div className="px-4 py-3 mb-4">
             <p className="text-sm font-medium truncate">{user?.full_name || user?.email}</p>
@@ -102,16 +121,31 @@ const AppLayout: React.FC = () => {
       </aside>
 
       {/* Header - Mobile */}
-      <header className="md:hidden bg-slate-900 text-white p-4 flex items-center justify-between sticky top-0 z-[60] border-b border-slate-800 shadow-lg">
-        <Logo variant="light" iconOnly className="h-8" />
-        <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
-          {isMobileMenuOpen ? <X /> : <Menu />}
+      {!isDeviceDetail && (
+        <header className="md:hidden bg-slate-900 text-white p-4 flex items-center justify-between sticky top-0 z-[60] border-b border-slate-800 shadow-lg">
+          <Logo variant="light" iconOnly className="h-8" />
+          <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
+            {isMobileMenuOpen ? <X /> : <Menu />}
+          </button>
+        </header>
+      )}
+
+      {/* Compact Mobile Menu Trigger on Device Detail */}
+      {isDeviceDetail && (
+        <button
+          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          className={`md:hidden fixed top-3 right-3 z-[70] w-11 h-11 rounded-full bg-slate-900/90 text-white shadow-lg border border-slate-700 flex items-center justify-center transition-all duration-200 ${
+            showDetailMenuButton ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'
+          }`}
+          aria-label={isMobileMenuOpen ? 'Menü schließen' : 'Menü öffnen'}
+        >
+          {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
-      </header>
+      )}
 
       {/* Mobile Menu Overlay */}
       {isMobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 bg-slate-900 z-50 pt-20 px-6">
+        <div className={`md:hidden fixed inset-0 bg-slate-900 z-50 px-6 ${isDeviceDetail ? 'pt-8' : 'pt-20'}`}>
           <nav className="space-y-2">
             {navItems.map((item) => (
               <Link
@@ -146,7 +180,7 @@ const AppLayout: React.FC = () => {
             {getPageTitle()}
           </h2>
         </header>
-        <div className="p-4 md:p-8 flex-1 overflow-auto scroll-smooth">
+        <div className="p-4 md:p-8 flex-1 overflow-auto scroll-smooth" onScroll={handleMainScroll}>
           <Outlet />
         </div>
       </main>

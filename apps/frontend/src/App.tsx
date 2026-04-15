@@ -1,15 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuthStore } from './hooks/useAuth';
 import PrivateRoute from './components/PrivateRoute';
 import AppLayout from './components/AppLayout';
-import LoginPage from './features/LoginPage';
-import DeviceListPage from './features/DeviceListPage';
-import DeviceDetailPage from './features/DeviceDetailPage';
-import TenantsPage from './features/TenantsPage';
-import AnalysisPage from './features/AnalysisPage';
-import UserManagementPage from './features/UserManagementPage';
 
 import { useQuery } from '@tanstack/react-query';
 import api from './lib/api';
@@ -20,6 +14,25 @@ import {
   Database, 
   ChevronRight
 } from 'lucide-react';
+
+const LoginPage = lazy(() => import('./features/LoginPage'));
+const DeviceListPage = lazy(() => import('./features/DeviceListPage'));
+const DeviceDetailPage = lazy(() => import('./features/DeviceDetailPage'));
+const TenantsPage = lazy(() => import('./features/TenantsPage'));
+const AnalysisPage = lazy(() => import('./features/AnalysisPage'));
+const UserManagementPage = lazy(() => import('./features/UserManagementPage'));
+
+const RouteLoader: React.FC = () => (
+  <div className="min-h-screen bg-slate-50 flex items-center justify-center px-6">
+    <div className="flex flex-col items-center gap-4 text-center">
+      <div className="h-10 w-10 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600"></div>
+      <div>
+        <p className="text-sm font-semibold text-slate-700">Ansicht wird geladen</p>
+        <p className="text-xs text-slate-400">Die Seite wird gerade vorbereitet.</p>
+      </div>
+    </div>
+  </div>
+);
 
 const Dashboard = () => {
   const { user } = useAuthStore();
@@ -125,20 +138,22 @@ const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          
-          <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/devices" element={<DeviceListPage />} />
-            <Route path="/devices/:deviceId" element={<DeviceDetailPage />} />
-            <Route path="/tenants" element={<TenantsPage />} />
-            <Route path="/users" element={<UserManagementPage />} />
-            <Route path="/analysis" element={<AnalysisPage />} />
-          </Route>
+        <Suspense fallback={<RouteLoader />}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            
+            <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/devices" element={<DeviceListPage />} />
+              <Route path="/devices/:deviceId" element={<DeviceDetailPage />} />
+              <Route path="/tenants" element={<TenantsPage />} />
+              <Route path="/users" element={<UserManagementPage />} />
+              <Route path="/analysis" element={<AnalysisPage />} />
+            </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </BrowserRouter>
     </QueryClientProvider>
   );

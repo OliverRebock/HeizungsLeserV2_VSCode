@@ -33,6 +33,9 @@ class DetectedErrorCode(BaseModel):
     source_entity: str
     source_label: str
     observed_value: str
+    first_seen_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+    seen_count: int = 1
 
 class DeepAnalysisResponse(BaseModel):
     device_id: int
@@ -44,6 +47,8 @@ class DeepAnalysisResponse(BaseModel):
     suspected_causes: List[str] = Field(default_factory=list)
     technical_findings: List[Finding] = Field(default_factory=list)
     confidence: str = "medium"
+    analysis_mode: str = "ai"
+    analysis_notice: Optional[str] = None
     disclaimer: str = "Diese vertiefte Analyse ist eine technische KI-Einschätzung und ersetzt keine professionelle Fehlerdiagnose vor Ort."
 
     class Config:
@@ -56,6 +61,9 @@ class ErrorCandidate(BaseModel):
     parsed_code: Optional[str] = None
     classification: str = "unknown"  # historical, active, unknown
     confidence: str = "medium"
+    first_seen_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+    seen_count: int = 1
 
 class AnalysisResponse(BaseModel):
     device_id: int
@@ -72,6 +80,8 @@ class AnalysisResponse(BaseModel):
     recommended_followup_checks: List[str] = Field(default_factory=list)
     confidence: str = "medium"
     should_trigger_error_analysis: bool = False
+    analysis_mode: str = "ai"
+    analysis_notice: Optional[str] = None
     disclaimer: str = "Die Analyse ist eine datenbasierte KI-Einschätzung und ersetzt keine fachliche Vor-Ort-Prüfung."
     raw_summary: Optional[Any] = None
     deep_analysis_result: Optional[DeepAnalysisResponse] = None

@@ -202,47 +202,123 @@ class InfluxService:
             
         return cleaned_name
 
-    def _get_value_semantics(self, eid: str, unit: Optional[str] = None) -> str:
+    def _get_value_semantics(
+        self,
+        domain: str,
+        unit: Optional[str] = None,
+        data_kind: Optional[str] = None,
+        state_class: Optional[str] = None,
+        device_class: Optional[str] = None,
+    ) -> str:
         """
-        Derives the semantic meaning of a value based on its ID, unit, or friendly name.
-        Classifies numeric values into:
-        - stateful: Values that naturally hold their state until a change occurs (e.g. Temperature, Pressure)
-        - instant: Instantaneous/Output-based values that represent activity/power (e.g. W, kW, Power)
-        - default: Standard fallback
+        Derives value semantics from generic metadata instead of entity-specific names.
         """
-        lower_eid = eid.lower()
-        lower_unit = unit.lower() if unit else ""
-        
-        # Instant/Output keywords (typically power, power output, watt, etc.)
-        # Wir erweitern die Keywords massiv, um "für alle" sinnvollen (nicht-Temperatur) Entitäten 
-        # eine 0-Referenz zu ermöglichen.
-        instant_keywords = [
-            "power", "leistung", "current_flow", "verbrauch", "output", "active_power", 
-            "apparent_power", "current", "speed", "drehzahl", "flow_pc", "energy", 
-            "consumption", "voltage", "spann", "current", "strom", "frequency", 
-            "frequenz", "flow", "durchfluss", "percent", "prozent", "coefficient", 
-            "cop", "duty", "modulation"
-        ]
-        instant_units = [
-            "w", "kw", "va", "var", "hz", "a", "%", "rpm", "l/h", "m3/h", "v", 
-            "wh", "kwh", "cop", "eer"
-        ]
-        
-        # Stateful keywords (typically temperatures, pressure, setpoints, battery levels)
-        stateful_keywords = ["temp", "grad", "grad_c", "druck", "pressure", "battery", "soc", "level", "setpoint", "target", "humidity", "feuchtigkeit"]
-        stateful_units = ["°c", "c", "bar", "psi"]
-        
-        if any(kw in lower_eid for kw in instant_keywords) or lower_unit in instant_units:
-            return "instant"
-            
-        if any(kw in lower_eid for kw in stateful_keywords) or lower_unit in stateful_units:
+        lower_domain = (domain or "sensor").lower()
+        lower_unit = (unit or "").strip().lower()
+        normalized_state_class = (state_class or "").strip().lower()
+        normalized_device_class = (device_class or "").strip().lower()
+
+        if data_kind in {"binary", "enum", "string"}:
             return "stateful"
-            
-        # Domain-based fallback
-        domain = eid.split('.')[0] if '.' in eid else "sensor"
-        if domain in ["binary_sensor", "switch", "lock", "input_boolean"]:
-            return "stateful" # Binary states are stateful
-            
+
+        if lower_domain in {"binary_sensor", "switch", "lock", "input_boolean"}:
+            return "stateful"
+
+        instant_device_classes = {
+            "apparent_power",
+            "current",
+            "current_phase",
+            "frequency",
+            "power",
+            "power_factor",
+            "reactive_power",
+            "signal_strength",
+            "speed",
+            "voltage",
+            "volume_flow_rate",
+            "wind_speed",
+        }
+        instant_units = {
+            "a",
+            "hz",
+            "kw",
+            "l/h",
+            "m3/h",
+            "ma",
+            "mw",
+            "rpm",
+            "v",
+            "va",
+            "var",
+            "w",
+        }
+        stateful_device_classes = {
+            "aqi",
+            "atmospheric_pressure",
+            "battery",
+            "carbon_dioxide",
+            "carbon_monoxide",
+            "distance",
+            "duration",
+            "energy",
+            "energy_storage",
+            "gas",
+            "humidity",
+            "illuminance",
+            "irradiance",
+            "moisture",
+            "monetary",
+            "nitrogen_dioxide",
+            "nitrogen_monoxide",
+            "nitrous_oxide",
+            "ozone",
+            "pm1",
+            "pm10",
+            "pm25",
+            "precipitation",
+            "precipitation_intensity",
+            "pressure",
+            "temperature",
+            "volatile_organic_compounds",
+            "volume",
+            "volume_storage",
+            "water",
+            "weight",
+        }
+        stateful_units = {
+            "%",
+            "°c",
+            "bar",
+            "c",
+            "kwh",
+            "l",
+            "m3",
+            "psi",
+            "wh",
+        }
+
+        if normalized_state_class in {"total", "total_increasing"}:
+            return "stateful"
+
+        if normalized_device_class in instant_device_classes:
+            return "instant"
+
+        if normalized_device_class in stateful_device_classes:
+            return "stateful"
+
+        if normalized_state_class == "measurement":
+            if lower_unit in instant_units:
+                return "instant"
+            if lower_unit in stateful_units:
+                return "stateful"
+            return "instant"
+
+        if lower_unit in instant_units:
+            return "instant"
+
+        if lower_unit in stateful_units:
+            return "stateful"
+
         return "default"
 
     def _format_utc_timestamp(self, value: datetime) -> str:
@@ -431,23 +507,74 @@ class InfluxService:
     def _classify_data_kind(
         self,
         domain: str,
-        eid: str,
         state_class: Optional[str] = None,
+        device_class: Optional[str] = None,
         unit_of_measurement: Optional[str] = None,
         options: Optional[List[str]] = None,
         samples: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         lower_domain = (domain or 'sensor').lower()
         normalized_state_class = (state_class or '').lower()
+        normalized_device_class = (device_class or '').lower()
         samples = [sample for sample in (samples or []) if sample]
 
-        if lower_domain in {'binary_sensor', 'switch', 'lock', 'input_boolean'}:
-            return 'binary'
+        domain_kind = self._get_data_kind(lower_domain)
 
-        if lower_domain in {'select', 'input_select', 'device_tracker', 'person', 'update'}:
+        if domain_kind in {'binary', 'enum', 'string'}:
+            return domain_kind
+
+        if options:
             return 'enum'
 
         if normalized_state_class in {'measurement', 'total', 'total_increasing'}:
+            return 'numeric'
+
+        if normalized_device_class in {
+            'apparent_power',
+            'aqi',
+            'atmospheric_pressure',
+            'battery',
+            'carbon_dioxide',
+            'carbon_monoxide',
+            'current',
+            'data_rate',
+            'distance',
+            'duration',
+            'energy',
+            'energy_storage',
+            'frequency',
+            'gas',
+            'humidity',
+            'illuminance',
+            'irradiance',
+            'moisture',
+            'monetary',
+            'nitrogen_dioxide',
+            'nitrogen_monoxide',
+            'nitrous_oxide',
+            'ozone',
+            'pm1',
+            'pm10',
+            'pm25',
+            'power',
+            'power_factor',
+            'precipitation',
+            'precipitation_intensity',
+            'pressure',
+            'reactive_power',
+            'signal_strength',
+            'speed',
+            'sulphur_dioxide',
+            'temperature',
+            'volatile_organic_compounds',
+            'voltage',
+            'volume',
+            'volume_flow_rate',
+            'volume_storage',
+            'water',
+            'weight',
+            'wind_speed',
+        }:
             return 'numeric'
 
         if unit_of_measurement:
@@ -459,21 +586,20 @@ class InfluxService:
         if samples and all(sample.get('binary_like') for sample in samples):
             return 'binary'
 
-        heuristic_kind = self._get_data_kind(lower_domain, eid)
-        if heuristic_kind != 'numeric':
-            return heuristic_kind
-
-        if options:
-            return 'enum'
-
         if samples and any(sample.get('state') for sample in samples):
+            unique_states = {
+                sample.get('state')
+                for sample in samples
+                if sample.get('state') not in {None, ''}
+            }
+            if unique_states and len(unique_states) <= 16:
+                return 'enum'
             return 'string'
 
-        return heuristic_kind
+        return domain_kind
 
     def _get_render_mode(
         self,
-        eid: str,
         data_kind: str,
         state_class: Optional[str] = None,
         samples: Optional[List[Dict[str, Any]]] = None,
@@ -494,49 +620,61 @@ class InfluxService:
         if normalized_state_class == "measurement":
             return "history_line"
 
-        lower_eid = eid.lower()
-        if any(kw in lower_eid for kw in ["starts", "total", "count", "counter", "zähler", "zaehler"]):
-            return "history_counter"
-
         if self._is_monotonic_counter(samples or []):
             return "history_counter"
 
         return "history_line"
 
-    def _get_data_kind(self, domain: str, eid: str) -> str:
+    def _derive_series_characteristics(
+        self,
+        domain: str,
+        state_class: Optional[str] = None,
+        device_class: Optional[str] = None,
+        unit_of_measurement: Optional[str] = None,
+        options: Optional[List[str]] = None,
+        samples: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, str, str]:
+        data_kind = self._classify_data_kind(
+            domain,
+            state_class=state_class,
+            device_class=device_class,
+            unit_of_measurement=unit_of_measurement,
+            options=options,
+            samples=samples,
+        )
+        value_semantics = self._get_value_semantics(
+            domain,
+            unit_of_measurement,
+            data_kind,
+            state_class,
+            device_class,
+        )
+        render_mode = self._get_render_mode(
+            data_kind,
+            state_class=state_class,
+            samples=samples,
+        )
+        return data_kind, value_semantics, render_mode
+
+    def _get_data_kind(self, domain: str) -> str:
         """
-        Derives data kind from domain and entity id.
-        Now covers a wide range of state-based sensors.
+        Derives a generic base data kind from the domain only.
         """
-        lower_eid = eid.lower()
-        
-        # Binary triggers
-        binary_domains = ["binary_sensor", "switch", "lock", "input_boolean"]
-        binary_keywords = ["active", "status_pc1", "status_pc2", "heating_active", "pump_status"]
-        
-        if domain in binary_domains or any(kw in lower_eid for kw in binary_keywords):
+        lower_domain = (domain or 'sensor').lower()
+
+        if lower_domain in {"binary_sensor", "switch", "lock", "input_boolean"}:
             return "binary"
-            
-        # Enum/Text detection for selects and status sensors
-        enum_triggers = [
-            "select", "status", "mode", "phase", "art", 
-            "state", "condition", "type", "step",
-            "error", "fault", "warning", "alarm", "code"
-        ]
-        
-        # Counter/Numeric triggers (Force these to be numeric even if they match enum triggers)
-        numeric_triggers = ["starts", "total", "count", "counter", "duration", "runtime", "level", "zähler", "zaehler"]
-        
-        if domain in ["select", "input_select", "device_tracker", "person", "update"]:
+
+        if lower_domain in {"select", "input_select", "device_tracker", "person", "update"}:
             return "enum"
-            
-        if any(nt in lower_eid for nt in numeric_triggers):
+
+        if lower_domain in {"text", "input_text"}:
+            return "string"
+
+        if lower_domain in {"sensor", "number", "input_number"}:
             return "numeric"
-            
-        if any(trigger in lower_eid for trigger in enum_triggers):
-            return "enum"
-            
-        return "numeric"
+
+        return "string"
 
     def _extract_record_value(self, record: Any) -> Any:
         raw_value = record.values.get("value")
@@ -659,6 +797,7 @@ class InfluxService:
         point_dt: datetime,
         value: Optional[float],
         state: Optional[str],
+        is_actual: bool = True,
     ) -> None:
         if value is None and state is None:
             return
@@ -667,10 +806,12 @@ class InfluxService:
             ts=self._format_utc_timestamp(point_dt),
             value=value,
             state=state,
+            is_actual=is_actual,
         )
 
         if points and points[-1].ts == point.ts:
-            points[-1] = point
+            if point.is_actual or not points[-1].is_actual:
+                points[-1] = point
             return
 
         points.append(point)
@@ -686,18 +827,42 @@ class InfluxService:
 
         if previous_sample and previous_sample.get('numeric_value') is not None:
             if not actual_samples or actual_samples[0]['dt'] > start_dt:
-                self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+                self._append_history_point(
+                    points,
+                    start_dt,
+                    previous_sample['numeric_value'],
+                    previous_sample.get('state'),
+                    is_actual=False,
+                )
 
         for sample in actual_samples:
             if sample.get('numeric_value') is None:
                 continue
-            self._append_history_point(points, sample['dt'], sample['numeric_value'], sample.get('state'))
+            self._append_history_point(
+                points,
+                sample['dt'],
+                sample['numeric_value'],
+                sample.get('state'),
+                is_actual=True,
+            )
 
         if not points and previous_sample and previous_sample.get('numeric_value') is not None:
-            self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+            self._append_history_point(
+                points,
+                start_dt,
+                previous_sample['numeric_value'],
+                previous_sample.get('state'),
+                is_actual=False,
+            )
 
         if points and points[-1].value is not None:
-            self._append_history_point(points, end_dt, points[-1].value, points[-1].state)
+            self._append_history_point(
+                points,
+                end_dt,
+                points[-1].value,
+                points[-1].state,
+                is_actual=False,
+            )
 
         return points
 
@@ -712,18 +877,42 @@ class InfluxService:
 
         if previous_sample and previous_sample.get('numeric_value') is not None:
             if not actual_samples or actual_samples[0]['dt'] > start_dt:
-                self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+                self._append_history_point(
+                    points,
+                    start_dt,
+                    previous_sample['numeric_value'],
+                    previous_sample.get('state'),
+                    is_actual=False,
+                )
 
         for sample in actual_samples:
             if sample.get('numeric_value') is None:
                 continue
-            self._append_history_point(points, sample['dt'], sample['numeric_value'], sample.get('state'))
+            self._append_history_point(
+                points,
+                sample['dt'],
+                sample['numeric_value'],
+                sample.get('state'),
+                is_actual=True,
+            )
 
         if not points and previous_sample and previous_sample.get('numeric_value') is not None:
-            self._append_history_point(points, start_dt, previous_sample['numeric_value'], previous_sample.get('state'))
+            self._append_history_point(
+                points,
+                start_dt,
+                previous_sample['numeric_value'],
+                previous_sample.get('state'),
+                is_actual=False,
+            )
 
         if points and points[-1].value is not None:
-            self._append_history_point(points, end_dt, points[-1].value, points[-1].state)
+            self._append_history_point(
+                points,
+                end_dt,
+                points[-1].value,
+                points[-1].state,
+                is_actual=False,
+            )
 
         return points
 
@@ -738,16 +927,40 @@ class InfluxService:
 
         if previous_sample:
             if not actual_samples or actual_samples[0]['dt'] > start_dt:
-                self._append_history_point(points, start_dt, previous_sample.get('numeric_value'), previous_sample.get('state'))
+                self._append_history_point(
+                    points,
+                    start_dt,
+                    previous_sample.get('numeric_value'),
+                    previous_sample.get('state'),
+                    is_actual=False,
+                )
 
         for sample in actual_samples:
-            self._append_history_point(points, sample['dt'], sample.get('numeric_value'), sample.get('state'))
+            self._append_history_point(
+                points,
+                sample['dt'],
+                sample.get('numeric_value'),
+                sample.get('state'),
+                is_actual=True,
+            )
 
         if not points and previous_sample:
-            self._append_history_point(points, start_dt, previous_sample.get('numeric_value'), previous_sample.get('state'))
+            self._append_history_point(
+                points,
+                start_dt,
+                previous_sample.get('numeric_value'),
+                previous_sample.get('state'),
+                is_actual=False,
+            )
 
         if points:
-            self._append_history_point(points, end_dt, points[-1].value, points[-1].state)
+            self._append_history_point(
+                points,
+                end_dt,
+                points[-1].value,
+                points[-1].state,
+                is_actual=False,
+            )
 
         return points
 
@@ -785,14 +998,14 @@ class InfluxService:
                         
                         # Basis-Entität hinzufügen
                         domain = eid.split('.')[0] if '.' in eid else "sensor"
-                        data_kind = self._get_data_kind(domain, eid)
-                        render_mode = self._get_render_mode(eid, data_kind)
+                        data_kind = self._get_data_kind(domain)
+                        render_mode = self._get_render_mode(data_kind)
                         entities.append(Entity(
                             entity_id=eid,
                             domain=domain,
                             friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
                             data_kind=data_kind,
-                            value_semantics=self._get_value_semantics(eid),
+                            value_semantics=self._get_value_semantics(domain, data_kind=data_kind),
                             render_mode=render_mode,
                             chartable=True,
                             source_table="multiple"
@@ -857,8 +1070,6 @@ class InfluxService:
                         if m.get("domain"):
                             ent.domain = m.get("domain")
                         
-                        ent.value_semantics = self._get_value_semantics(ent.entity_id, ent.unit_of_measurement)
-
                         # LAST VALUE LOGIK
                         # Wir probieren verschiedene Felder für den aktuellen Wert
                         val = m.get("value")
@@ -876,18 +1087,12 @@ class InfluxService:
                             sample_dt = m.get("_time") if isinstance(m.get("_time"), datetime) else datetime.now(timezone.utc)
                             sample_values.append(self._build_sample_point(sample_dt, val))
 
-                        ent.data_kind = self._classify_data_kind(
+                        ent.data_kind, ent.value_semantics, ent.render_mode = self._derive_series_characteristics(
                             ent.domain,
-                            ent.entity_id,
                             state_class=state_class,
+                            device_class=device_class,
                             unit_of_measurement=ent.unit_of_measurement,
                             options=options,
-                            samples=sample_values,
-                        )
-                        ent.render_mode = self._get_render_mode(
-                            ent.entity_id,
-                            ent.data_kind,
-                            state_class=state_class,
                             samples=sample_values,
                         )
 
@@ -908,14 +1113,14 @@ class InfluxService:
                             continue
                         seen_ids.add(eid)
                         domain = eid.split('.')[0]
-                        data_kind = "binary" if domain == "binary_sensor" else "numeric"
+                        data_kind = self._get_data_kind(domain)
                         entities.append(Entity(
                             entity_id=eid,
                             domain=domain,
                             friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
                             data_kind=data_kind,
-                            value_semantics=self._get_value_semantics(eid),
-                            render_mode=self._get_render_mode(eid, data_kind),
+                            value_semantics=self._get_value_semantics(domain, data_kind=data_kind),
+                            render_mode=self._get_render_mode(data_kind),
                             chartable=True,
                             source_table=eid
                         ))
@@ -936,29 +1141,30 @@ class InfluxService:
         entity_ids: List[str]
     ) -> List[DashboardEntityData]:
         """
-        Fetch specialized dashboard data: 
-        - the very last REAL point (no carry forward, no padding)
-        - a clean, aggregated sparkline (last 24h, 48 points)
-        - freshness check
+        Fetch specialized dashboard data:
+        - the latest real point
+        - a lightweight 24h sparkline aligned with the chart semantics
+        - freshness information
         """
-        import pytz
-        from datetime import datetime, timedelta
-        
         bucket = device.influx_database_name or settings.INFLUXDB_BUCKET
         query_api = self.client.query_api()
-        tz_berlin = pytz.timezone("Europe/Berlin")
-        
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(hours=24)
+        start_ts = self._format_utc_timestamp(start_dt)
+        end_ts = self._format_utc_timestamp(end_dt)
         results = []
-        
+
         for eid in entity_ids:
             try:
-                # 0. Determine data kind and aggregation strategy
                 domain = eid.split('.')[0] if '.' in eid else "sensor"
-                data_kind = self._get_data_kind(domain, eid)
-                # Use mean for numeric, but last/max for others to avoid InfluxDB errors with strings
-                agg_fn = "mean" if data_kind == "numeric" else "last"
+                latest_samples = []
+                metadata = self._read_entity_metadata(query_api, bucket, eid, end_dt)
+                friendly_name = metadata.get("friendly_name", eid)
+                state_class = metadata.get("state_class")
+                device_class = metadata.get("device_class")
+                unit_of_measurement = metadata.get("unit_of_measurement")
+                options = metadata.get("options")
 
-                # 1. Get the last point EVER for this entity (latest point)
                 last_query = f'''
                     from(bucket: "{bucket}")
                     |> range(start: 0)
@@ -967,9 +1173,8 @@ class InfluxService:
                     |> last()
                     |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
                 '''
-                
+
                 latest_point = None
-                friendly_name = eid
                 last_tables = query_api.query(query=last_query)
                 for table in last_tables:
                     for record in table.records:
@@ -988,65 +1193,70 @@ class InfluxService:
                             low_val = val.lower()
                             if low_val in ['on', 'true', 'active', 'heating', 'an']: num_val = 1.0
                             elif low_val in ['off', 'false', 'idle', 'inactive', 'aus']: num_val = 0.0
-                        
+
+                        latest_samples.append(self._build_sample_point(record.get_time(), val))
+
                         latest_point = DashboardDataPoint(ts=ts, value=num_val, state=state, is_actual=True)
 
-                # 2. Get aggregated sparkline (last 24h, 48 points/buckets)
-                # We use 30m windows for 24h = 48 points
-                # For sparkline we only care about numeric value
+                previous_sample = self._read_last_sample_before(query_api, bucket, eid, start_dt)
+                classification_samples = ([previous_sample] if previous_sample else []) + latest_samples
+                data_kind, value_semantics, render_mode = self._derive_series_characteristics(
+                    domain,
+                    state_class=state_class,
+                    device_class=device_class,
+                    unit_of_measurement=unit_of_measurement,
+                    options=options,
+                    samples=classification_samples,
+                )
+                uses_held_values = render_mode == "history_counter" or value_semantics == "instant"
+                agg_fn = "last" if uses_held_values or data_kind != "numeric" else "mean"
+
                 sparkline_points = []
-                try:
-                    # To avoid schema collision (float vs string), we process fields separately or cast
-                    # For sparklines, we prefer the "value" field.
+                if data_kind == "numeric":
+                    aggregated_samples = []
                     sparkline_query = f'''
                         from(bucket: "{bucket}")
-                        |> range(start: -24h)
+                        |> range(start: time(v: "{start_ts}"), stop: time(v: "{end_ts}"))
                         |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
                         |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
                         |> map(fn: (r) => ({{ r with _value: float(v: r._value) }}))
                         |> aggregateWindow(every: 30m, fn: {agg_fn}, createEmpty: false)
                         |> keep(columns: ["_time", "_value"])
                     '''
-                    
-                    spark_tables = query_api.query(query=sparkline_query)
-                    for table in spark_tables:
-                        for record in table.records:
-                            rec_val = record.get_value()
-                            num_rec_val = 0.0
-                            if isinstance(rec_val, (int, float)):
-                                num_rec_val = float(rec_val)
-                            elif isinstance(rec_val, bool):
-                                num_rec_val = 1.0 if rec_val else 0.0
-                            elif isinstance(rec_val, str):
-                                low_rec = rec_val.lower()
-                                if low_rec in ['on', 'true', 'active', 'heating', 'an']: num_rec_val = 1.0
-                                elif low_rec in ['off', 'false', 'idle', 'inactive', 'aus']: num_rec_val = 0.0
-                                
-                            sparkline_points.append(DashboardDataPoint(
-                                ts=record.get_time().isoformat(),
-                                value=num_rec_val,
-                                state="",
-                                is_actual=False
-                            ))
-                except Exception as spark_err:
-                    logger.warning(f"Could not fetch sparkline for {eid}: {spark_err}")
-                    # Keep empty list, but don't fail the whole entity
 
-                # 3. Get friendly name if possible
-                fn_query = f'''
-                    from(bucket: "{bucket}")
-                    |> range(start: -7d)
-                    |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
-                    |> filter(fn: (r) => r["_field"] == "friendly_name_str")
-                    |> last()
-                '''
-                fn_tables = query_api.query(query=fn_query)
-                for table in fn_tables:
-                    for record in table.records:
-                        if record.get_value():
-                            friendly_name = self._clean_friendly_name(record.get_value())
+                    try:
+                        spark_tables = query_api.query(query=sparkline_query)
+                        for table in spark_tables:
+                            for record in table.records:
+                                aggregated_samples.append(self._build_sample_point(record.get_time(), record.get_value()))
+                    except Exception as spark_err:
+                        logger.warning(f"Could not fetch sparkline for {eid}: {spark_err}")
 
-                # Freshness check
+                    if render_mode == "history_counter":
+                        sparkline_data = self._build_history_counter_points(
+                            start_dt,
+                            end_dt,
+                            previous_sample,
+                            aggregated_samples,
+                        )
+                    else:
+                        sparkline_data = self._build_history_line_points(
+                            start_dt,
+                            end_dt,
+                            previous_sample,
+                            aggregated_samples,
+                        )
+
+                    sparkline_points = [
+                        DashboardDataPoint(
+                            ts=point.ts,
+                            value=point.value,
+                            state=point.state,
+                            is_actual=point.is_actual,
+                        )
+                        for point in sparkline_data
+                    ]
+
                 is_stale = True
                 freshness_info = "Keine Daten"
                 if latest_point:
@@ -1066,10 +1276,6 @@ class InfluxService:
                         else:
                             freshness_info = f"Vor {int(diff.days)} Tagen"
 
-                data_kind = self._get_data_kind(eid.split('.')[0] if '.' in eid else "sensor", eid)
-                value_semantics = self._get_value_semantics(eid)
-                render_mode = self._get_render_mode(eid, data_kind)
-                
                 results.append(DashboardEntityData(
                     entity_id=eid,
                     friendly_name=friendly_name,
@@ -1077,6 +1283,9 @@ class InfluxService:
                     data_kind=data_kind,
                     value_semantics=value_semantics,
                     render_mode=render_mode,
+                    state_class=state_class,
+                    device_class=device_class,
+                    unit_of_measurement=unit_of_measurement,
                     latest_point=latest_point,
                     sparkline=sparkline_points,
                     is_stale=is_stale,
@@ -1121,19 +1330,12 @@ class InfluxService:
             device_class = metadata.get("device_class")
             options = metadata.get("options")
 
-            data_kind = self._classify_data_kind(
+            data_kind, value_semantics, render_mode = self._derive_series_characteristics(
                 domain,
-                eid,
                 state_class=state_class,
+                device_class=device_class,
                 unit_of_measurement=unit_of_measurement,
                 options=options,
-                samples=classification_samples,
-            )
-            value_semantics = self._get_value_semantics(eid, unit_of_measurement)
-            render_mode = self._get_render_mode(
-                eid,
-                data_kind,
-                state_class=state_class,
                 samples=classification_samples,
             )
 
