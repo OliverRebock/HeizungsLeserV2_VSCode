@@ -22,8 +22,7 @@ import {
   Thermometer,
   Siren,
   Clock3,
-  SendHorizontal,
-  MessageSquareText
+  MessageSquarePlus
 } from 'lucide-react';
 import api from '../lib/api';
 import { useAuthStore } from '../hooks/useAuth';
@@ -106,16 +105,6 @@ type SpeechRecognitionInstance = {
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
 
-type SpeechTarget = 'note' | 'chat';
-
-type ChatMessage = {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  createdAt: string;
-  meta?: string;
-};
-
 declare global {
   interface Window {
     SpeechRecognition?: SpeechRecognitionConstructor;
@@ -190,68 +179,6 @@ const buildDeepAnalysisFocus = (selectedIssue: string, problemNote: string) => {
     .filter(Boolean)
     .join(' ');
 };
-
-const buildChatAnalysisFocus = (
-  selectedIssue: string,
-  problemNote: string,
-  chatMessages: ChatMessage[],
-  latestMessage: string,
-  baseAnalysis?: AnalysisResponse | null,
-) => {
-  const selectedOption = ISSUE_OPTIONS.find((option) => option.value === selectedIssue) ?? ISSUE_OPTIONS[0];
-  const recentMessages = chatMessages
-    .slice(-6)
-    .map((message) => `${message.role === 'user' ? 'Monteur' : 'Assistent'}: ${message.content}`)
-    .join(' | ');
-
-  return [
-    `Chat-Modus für Heizungsbauer zum Einsatzfall: ${selectedOption.label}.`,
-    'Antworte wie ein technischer Assistent im Vor-Ort-Einsatz.',
-    'Erst kurz den Zustand einordnen, dann maximal 3 konkrete Schritte nennen.',
-    'Verwende klare Monteur-Sprache, keine Management-Formulierungen.',
-    problemNote.trim() ? `Vor-Ort-Notiz: ${problemNote.trim()}.` : null,
-    baseAnalysis?.summary ? `Bisherige Haupteinschätzung: ${baseAnalysis.summary}.` : null,
-    recentMessages ? `Bisheriger Chatverlauf: ${recentMessages}.` : null,
-    `Neue Frage vom Monteur: ${latestMessage.trim()}.`,
-  ]
-    .filter(Boolean)
-    .join(' ');
-};
-
-const buildAssistantChatMessage = (analysis: AnalysisResponse) => {
-  const parts: string[] = [analysis.summary];
-
-  if (analysis.detected_error_codes.length > 0) {
-    const firstCode = analysis.detected_error_codes[0];
-    parts.push(`Fehlercode im Fokus: ${firstCode.code} ${firstCode.label}.`);
-  }
-
-  if (analysis.findings[0]) {
-    parts.push(`Wichtigster Befund: ${analysis.findings[0].title}. ${analysis.findings[0].description}`);
-  }
-
-  if (analysis.recommended_followup_checks.length > 0) {
-    const steps = analysis.recommended_followup_checks.slice(0, 3);
-    parts.push(`Nächste Schritte: ${steps.map((step, index) => `${index + 1}. ${step}`).join(' ')}`);
-  } else if (analysis.optimization_hints.length > 0) {
-    const steps = analysis.optimization_hints.slice(0, 2);
-    parts.push(`Prüfhinweise: ${steps.join(' ')}`);
-  }
-
-  return parts.join('\n\n');
-};
-
-const createChatMessage = (
-  role: ChatMessage['role'],
-  content: string,
-  meta?: string,
-): ChatMessage => ({
-  id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  role,
-  content,
-  meta,
-  createdAt: new Date().toISOString(),
-});
 
 const getRangeStartDate = (selectedRange: string, forDeepAnalysis = false) => {
   const fromDate = new Date();
@@ -560,9 +487,6 @@ const AnalysisPage: React.FC = () => {
   const { user } = useAuthStore();
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const speechBaseNoteRef = useRef('');
-  const speechTargetRef = useRef<SpeechTarget | null>(null);
-  const shouldAutoSendChatRef = useRef(false);
-  const chatDraftRef = useRef('');
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
   const [selectedRange, setSelectedRange] = useState('24h');
@@ -578,8 +502,6 @@ const AnalysisPage: React.FC = () => {
   const [formError, setFormError] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState('');
-  const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
   const speechRecognitionApi = typeof window !== 'undefined'
     ? window.SpeechRecognition ?? window.webkitSpeechRecognition
@@ -591,10 +513,6 @@ const AnalysisPage: React.FC = () => {
       recognitionRef.current?.stop();
     };
   }, []);
-
-  useEffect(() => {
-    chatDraftRef.current = chatInput;
-  }, [chatInput]);
 
   // 2. Load Devices
   const { data: devices, isLoading: isDevicesLoading } = useQuery({
@@ -625,29 +543,16 @@ const AnalysisPage: React.FC = () => {
       setAnalysisResult(data);
       setShowDetailedResults(false);
       setShowErrorAnalysisInfo(Boolean(data?.should_trigger_error_analysis));
-      if (data) {
-        setChatMessages([
-          createChatMessage(
-            'assistant',
-            buildAssistantChatMessage(data),
-            'Erstantwort aus dem Schnellcheck',
-          ),
-        ]);
-        setChatInput('');
-      }
     }
   });
 
   const handleStartAnalysis = () => {
     recognitionRef.current?.stop();
-    speechTargetRef.current = null;
     setSpeechError('');
     setAnalysisResult(null);
     setDeepAnalysisResult(null);
     setShowDetailedResults(false);
     setShowErrorAnalysisInfo(false);
-    setChatMessages([]);
-    setChatInput('');
     analysisMutation.mutate();
   };
 
@@ -695,41 +600,17 @@ const AnalysisPage: React.FC = () => {
     setShowDeepAnalysisModal(true);
   };
 
-  const handleSendChatMessage = (messageOverride?: string) => {
-    const trimmedMessage = (messageOverride ?? chatDraftRef.current).trim();
-    if (!trimmedMessage || !analysisResult || chatMutation.isPending) {
-      return;
-    }
-
-    setSpeechError('');
-    setChatMessages((current) => [
-      ...current,
-      createChatMessage('user', trimmedMessage, 'Frage vom Monteur'),
-    ]);
-    setChatInput('');
-    chatDraftRef.current = '';
-    chatMutation.mutate(trimmedMessage);
-  };
-
-  const startSpeechInput = (target: SpeechTarget, autoSendOnEnd = false) => {
+  const startSpeechInput = () => {
     if (!speechRecognitionApi) {
       setSpeechError('Dieser Browser unterstützt keine Spracheingabe. Empfohlen: aktuelles Chrome oder Edge.');
       return;
     }
 
-    if (isListening && speechTargetRef.current === target) {
+    if (isListening) {
       return;
     }
 
-    if (isListening && speechTargetRef.current && speechTargetRef.current !== target) {
-      recognitionRef.current?.stop();
-      setSpeechError('Die laufende Aufnahme wurde beendet. Bitte den Mikrofon-Button erneut für das gewünschte Feld drücken.');
-      return;
-    }
-
-    speechBaseNoteRef.current = (target === 'note' ? problemNote : chatInput).trim();
-    speechTargetRef.current = target;
-  shouldAutoSendChatRef.current = target === 'chat' && autoSendOnEnd;
+    speechBaseNoteRef.current = problemNote.trim();
     setSpeechError('');
 
     const recognition = new speechRecognitionApi();
@@ -744,31 +625,16 @@ const AnalysisPage: React.FC = () => {
         .trim();
 
       const mergedText = [speechBaseNoteRef.current, transcript].filter(Boolean).join(' ').trim();
-      if (speechTargetRef.current === 'chat') {
-        setChatInput(mergedText);
-        chatDraftRef.current = mergedText;
-      } else {
-        setProblemNote(mergedText);
-      }
+      setProblemNote(mergedText);
     };
 
     recognition.onerror = (event) => {
       setSpeechError(getSpeechRecognitionErrorMessage(event.error));
       setIsListening(false);
-      shouldAutoSendChatRef.current = false;
-      speechTargetRef.current = null;
     };
 
     recognition.onend = () => {
       setIsListening(false);
-      const shouldAutoSend = shouldAutoSendChatRef.current;
-      const activeTarget = speechTargetRef.current;
-      shouldAutoSendChatRef.current = false;
-      speechTargetRef.current = null;
-
-      if (activeTarget === 'chat' && shouldAutoSend) {
-        handleSendChatMessage(chatDraftRef.current);
-      }
     };
 
     recognitionRef.current = recognition;
@@ -776,56 +642,33 @@ const AnalysisPage: React.FC = () => {
     recognition.start();
   };
 
-  const stopSpeechInput = (target?: SpeechTarget) => {
+  const stopSpeechInput = () => {
     if (!isListening) {
-      return;
-    }
-
-    if (target && speechTargetRef.current !== target) {
       return;
     }
 
     recognitionRef.current?.stop();
   };
 
-  const chatMutation = useMutation({
-    mutationFn: async (message: string) => {
-      if (!selectedDeviceId) {
-        return null;
-      }
+  const handleOpenChatWindow = () => {
+    if (!selectedDeviceId) {
+      return;
+    }
 
-      const fromDate = getRangeStartDate(selectedRange);
-      const response = await api.post<AnalysisResponse>(`/analysis/${selectedDeviceId}`, {
-        from: fromDate.toISOString(),
-        to: new Date().toISOString(),
-        analysis_focus: buildChatAnalysisFocus(selectedIssue, problemNote, chatMessages, message, analysisResult),
-        language: 'de',
-      });
+    const params = new URLSearchParams({
+      deviceId: String(selectedDeviceId),
+      range: selectedRange,
+      issue: selectedIssue,
+      note: problemNote,
+    });
 
-      return response.data;
-    },
-    onSuccess: (data) => {
-      if (!data) {
-        return;
-      }
+    const chatUrl = `${window.location.origin}/analysis/chat?${params.toString()}`;
+    const popup = window.open(chatUrl, 'einsatz-chat-window', 'noopener,noreferrer,width=980,height=860');
 
-      setChatMessages((current) => [
-        ...current,
-        createChatMessage('assistant', buildAssistantChatMessage(data), 'Antwort aus dem Einsatz-Chat'),
-      ]);
-      setSpeechError('');
-    },
-    onError: (error) => {
-      setChatMessages((current) => [
-        ...current,
-        createChatMessage(
-          'assistant',
-          getApiErrorMessage(error, 'Die Chat-Antwort konnte nicht erzeugt werden.'),
-          'Fehler',
-        ),
-      ]);
-    },
-  });
+    if (popup) {
+      popup.focus();
+    }
+  };
 
   const analysisErrorMessage = getApiErrorMessage(
     analysisMutation.error,
@@ -984,63 +827,106 @@ const AnalysisPage: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Selection Area */}
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-6">
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-3">1. Gerät auswählen</label>
-              <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                {isDevicesLoading ? (
-                  Array.from({ length: 3 }).map((_, i) => (
-                    <div key={i} className="h-12 bg-slate-50 animate-pulse rounded-lg border border-slate-100"></div>
-                  ))
-                ) : devices?.length === 0 ? (
-                  <p className="text-sm text-slate-500 italic p-4 text-center">Keine Geräte verfügbar</p>
-                ) : (
-                  devices?.map((device) => (
-                    <button
-                      key={device.id}
-                      onClick={() => setSelectedDeviceId(device.id)}
-                      className={`w-full flex items-center justify-between p-3 rounded-lg border transition text-left group ${
-                        selectedDeviceId === device.id
-                          ? 'bg-blue-50 border-blue-400 text-blue-700'
-                          : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Activity className={`w-4 h-4 ${selectedDeviceId === device.id ? 'text-blue-500' : 'text-slate-400'}`} />
-                        <div>
-                          <p className="font-medium text-sm">{device.display_name}</p>
-                          <p className="text-[10px] opacity-60 uppercase tracking-tighter">{device.slug}</p>
-                        </div>
-                      </div>
-                      <ChevronRight className={`w-4 h-4 transition ${selectedDeviceId === device.id ? 'translate-x-1 opacity-100' : 'opacity-0'}`} />
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-3">2. Zeitraum festlegen</label>
-              <div className="grid grid-cols-3 gap-2">
-                {TIME_RANGES.map((range) => (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <label className="block text-sm font-semibold text-slate-700 mb-3">Gerät auswählen</label>
+            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+              {isDevicesLoading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-12 bg-slate-50 animate-pulse rounded-lg border border-slate-100"></div>
+                ))
+              ) : devices?.length === 0 ? (
+                <p className="text-sm text-slate-500 italic p-4 text-center">Keine Geräte verfügbar</p>
+              ) : (
+                devices?.map((device) => (
                   <button
-                    key={range.value}
-                    onClick={() => setSelectedRange(range.value)}
-                    className={`px-3 py-2 rounded-lg border text-xs font-medium transition ${
-                      selectedRange === range.value
-                        ? 'bg-blue-600 border-blue-600 text-white'
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    key={device.id}
+                    onClick={() => setSelectedDeviceId(device.id)}
+                    className={`w-full flex items-center justify-between p-3 rounded-lg border transition text-left group ${
+                      selectedDeviceId === device.id
+                        ? 'bg-blue-50 border-blue-400 text-blue-700'
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
                     }`}
                   >
-                    {range.label}
+                    <div className="flex items-center gap-3">
+                      <Activity className={`w-4 h-4 ${
+                        selectedDeviceId === device.id ? 'text-blue-500' : 'text-slate-400'
+                      }`} />
+                      <div>
+                        <p className="font-medium text-sm">{device.display_name}</p>
+                        <p className="text-[10px] opacity-60 uppercase tracking-tighter">{device.slug}</p>
+                      </div>
+                    </div>
+                    <ChevronRight className={`w-4 h-4 transition ${
+                      selectedDeviceId === device.id ? 'translate-x-1 opacity-100' : 'opacity-0'
+                    }`} />
                   </button>
-                ))}
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <label className="block text-sm font-semibold text-slate-700 mb-3">Zeitraum festlegen</label>
+            <div className="grid grid-cols-3 gap-2">
+              {TIME_RANGES.map((range) => (
+                <button
+                  key={range.value}
+                  onClick={() => setSelectedRange(range.value)}
+                  className={`px-3 py-2 rounded-lg border text-xs font-medium transition ${
+                    selectedRange === range.value
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {range.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-b from-blue-50 to-white rounded-2xl shadow-md border-2 border-blue-400 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-blue-600 text-white p-2.5 rounded-lg">
+                <MessageSquarePlus className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Einsatz-Chat</h2>
+                <p className="text-xs text-slate-600 mt-0.5">Interaktive Live-Hilfe beim Kunden</p>
               </div>
             </div>
+            
+            <div className="bg-white rounded-xl border border-blue-200 p-4">
+              <p className="text-sm text-slate-700 leading-relaxed mb-3">
+                Direkt im Einsatz: Fragen in Monteur-Sprache stellen, sofort Antwort erhalten. Ideal für schnelle Prüfschritte vor Ort.
+              </p>
+              <button
+                onClick={handleOpenChatWindow}
+                disabled={!selectedDeviceId}
+                className={`w-full py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition ${
+                  !selectedDeviceId
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98]'
+                }`}
+              >
+                <MessageSquarePlus className="w-4 h-4" />
+                Chat öffnen
+              </button>
+            </div>
+          </div>
 
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-6">
+            <div className="flex items-center gap-3 pb-2 border-b border-slate-200">
+              <div className="bg-slate-900 text-white p-2.5 rounded-lg">
+                <Brain className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">KI-Schnellcheck</h2>
+                <p className="text-xs text-slate-600 mt-0.5">Detaillierte schriftliche Analyse</p>
+              </div>
+            </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-3">3. Problem eingrenzen</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-3">1. Problem eingrenzen</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2">
                   {ISSUE_OPTIONS.map((issue) => (
                     <button
@@ -1058,83 +944,35 @@ const AnalysisPage: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Kurzer Hinweis optional</label>
-                <div className="space-y-2">
-                  <textarea
-                    rows={4}
-                    value={problemNote}
-                    onChange={(e) => setProblemNote(e.target.value)}
-                    placeholder="z. B. Kunde meldet keine Wärme seit heute Morgen, Fehlercode im Display, hohe Taktung..."
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                  />
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="text-[11px] text-slate-500">
-                      Spracheingabe für Monteur-Notizen: kurz sprechen, Text wird direkt in das Hinweisfeld übernommen.
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => (isListening && speechTargetRef.current === 'note' ? stopSpeechInput('note') : startSpeechInput('note'))}
-                      disabled={!speechSupported && !isListening}
-                      className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                        isListening && speechTargetRef.current === 'note'
-                          ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
-                          : 'bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed'
-                      }`}
-                    >
-                      {isListening && speechTargetRef.current === 'note' ? (
-                        <>
-                          <Square className="w-3.5 h-3.5" />
-                          Aufnahme stoppen
-                        </>
-                      ) : (
-                        <>
-                          <Mic className="w-3.5 h-3.5" />
-                          Spracheingabe starten
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  {!speechSupported && (
-                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      Spracheingabe ist nur in Browsern mit Web-Speech-Unterstützung verfügbar, typischerweise Chrome oder Edge.
-                    </p>
-                  )}
-                  {speechError && (
-                    <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                      {speechError}
-                    </p>
-                  )}
-                </div>
-              </div>
+              <button
+                onClick={handleStartAnalysis}
+                disabled={!selectedDeviceId || analysisMutation.isPending}
+                className={`w-full py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition ${
+                  !selectedDeviceId || analysisMutation.isPending
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-slate-900 text-white hover:bg-slate-800 active:scale-[0.98]'
+                }`}
+              >
+                {analysisMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Schnellcheck läuft...
+                  </>
+                ) : (
+                  <>
+                    <Brain className="w-4 h-4" />
+                    Schnellcheck ausführen
+                  </>
+                )}
+              </button>
+
             </div>
 
-            <button
-              onClick={handleStartAnalysis}
-              disabled={!selectedDeviceId || analysisMutation.isPending}
-              className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-3 transition shadow-sm ${
-                !selectedDeviceId || analysisMutation.isPending
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
-                  : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98]'
-              }`}
-            >
-              {analysisMutation.isPending ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Analysiere Daten...
-                </>
-              ) : (
-                <>
-                  <Brain className="w-5 h-5" />
-                  Schnellcheck starten
-                </>
-              )}
-            </button>
           </div>
         </div>
 
         {/* Results Area */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="lg:col-span-2 space-y-4">
           {!analysisResult && !analysisMutation.isPending && !analysisMutation.isError && (
             <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl h-[500px] flex flex-col items-center justify-center text-slate-400 p-8 text-center">
               <div className="bg-slate-50 p-6 rounded-full mb-6">
@@ -1183,7 +1021,7 @@ const AnalysisPage: React.FC = () => {
           )}
 
           {analysisResult && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
               {analysisResult.analysis_notice && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 items-start">
                   <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
@@ -1332,154 +1170,6 @@ const AnalysisPage: React.FC = () => {
                       </div>
                     </div>
                   )}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-4 bg-white border border-slate-200 rounded-xl p-4">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Technische Details nur bei Bedarf</p>
-                  <p className="text-xs text-slate-500 mt-1">Die ausführliche Fehleranalyse bleibt standardmäßig eingeklappt.</p>
-                </div>
-                <button
-                  onClick={() => setShowDetailedResults((current) => !current)}
-                  className="px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
-                >
-                  {showDetailedResults ? 'Details ausblenden' : 'Details anzeigen'}
-                </button>
-              </div>
-
-              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                <div className="p-5 md:p-6 border-b border-slate-100 bg-slate-50">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-slate-900 text-white p-2.5 rounded-xl">
-                        <MessageSquareText className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-bold text-slate-900">Einsatz-Chat</h3>
-                        <p className="text-sm text-slate-500">Folgefragen per Text oder Mikrofon stellen, Antwort kommt in kurzer Monteur-Sprache.</p>
-                      </div>
-                    </div>
-                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-600">
-                      Live-Transkript + KI-Antwort
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-5 md:p-6 space-y-4">
-                  <div className="max-h-[420px] overflow-y-auto space-y-3 pr-1">
-                    {chatMessages.length > 0 ? (
-                      chatMessages.map((message) => (
-                        <div
-                          key={message.id}
-                          className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                        >
-                          <div
-                            className={`max-w-[90%] rounded-2xl px-4 py-3 shadow-sm border ${
-                              message.role === 'user'
-                                ? 'bg-blue-600 text-white border-blue-600'
-                                : 'bg-slate-50 text-slate-800 border-slate-200'
-                            }`}
-                          >
-                            {message.meta && (
-                              <p
-                                className={`text-[10px] font-semibold uppercase tracking-[0.16em] mb-2 ${
-                                  message.role === 'user' ? 'text-blue-100' : 'text-slate-500'
-                                }`}
-                              >
-                                {message.meta}
-                              </p>
-                            )}
-                            <p className="text-sm leading-relaxed whitespace-pre-line">{message.content}</p>
-                            <p
-                              className={`text-[10px] mt-2 ${
-                                message.role === 'user' ? 'text-blue-100/80' : 'text-slate-400'
-                              }`}
-                            >
-                              {new Date(message.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
-                            </p>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                        Nach dem Schnellcheck kannst du hier Rückfragen stellen, zum Beispiel: "Ist das eher Sensorik oder Hydraulik?" oder "Womit starte ich am Gerät?"
-                      </div>
-                    )}
-
-                    {chatMutation.isPending && (
-                      <div className="flex justify-start">
-                        <div className="max-w-[90%] rounded-2xl px-4 py-3 shadow-sm border bg-slate-50 text-slate-800 border-slate-200">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] mb-2 text-slate-500">Assistent denkt</p>
-                          <div className="flex items-center gap-2 text-sm text-slate-500">
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Die nächste Monteur-Antwort wird erzeugt...
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-3">
-                    <textarea
-                      rows={3}
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          handleSendChatMessage();
-                        }
-                      }}
-                      placeholder="Frage an die KI, z. B. 'Ist der Fehler eher hydraulisch oder elektrisch?'"
-                      className="w-full rounded-xl border border-white bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                    />
-
-                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div className="text-[11px] text-slate-500">
-                        Mit `Enter` senden, mit `Shift + Enter` Zeilenumbruch. Mikrofon gedrückt halten, sprechen, loslassen: dann wird automatisch gesendet.
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onPointerDown={(e) => {
-                            e.preventDefault();
-                            startSpeechInput('chat', true);
-                          }}
-                          onPointerUp={(e) => {
-                            e.preventDefault();
-                            stopSpeechInput('chat');
-                          }}
-                          onPointerLeave={() => {
-                            stopSpeechInput('chat');
-                          }}
-                          onPointerCancel={() => {
-                            stopSpeechInput('chat');
-                          }}
-                          disabled={!speechSupported && !isListening}
-                          title={isListening && speechTargetRef.current === 'chat' ? 'Spracheingabe läuft' : 'Zum Sprechen gedrückt halten'}
-                          aria-label={isListening && speechTargetRef.current === 'chat' ? 'Spracheingabe läuft' : 'Zum Sprechen gedrückt halten'}
-                          className={`inline-flex h-11 w-11 items-center justify-center rounded-full border transition select-none touch-none ${
-                            isListening && speechTargetRef.current === 'chat'
-                              ? 'bg-red-50 text-red-700 border-red-200 shadow-inner scale-95'
-                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed'
-                          }`}
-                        >
-                          {isListening && speechTargetRef.current === 'chat' ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleSendChatMessage()}
-                          disabled={!chatInput.trim() || chatMutation.isPending}
-                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <SendHorizontal className="w-3.5 h-3.5" />
-                          Senden
-                        </button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
 

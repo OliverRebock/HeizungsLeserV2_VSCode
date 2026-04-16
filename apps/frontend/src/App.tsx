@@ -20,6 +20,7 @@ const DeviceListPage = lazy(() => import('./features/DeviceListPage'));
 const DeviceDetailPage = lazy(() => import('./features/DeviceDetailPage'));
 const TenantsPage = lazy(() => import('./features/TenantsPage'));
 const AnalysisPage = lazy(() => import('./features/AnalysisPage'));
+const AnalysisChatWindowPage = lazy(() => import('./features/AnalysisChatWindowPage'));
 const UserManagementPage = lazy(() => import('./features/UserManagementPage'));
 
 const RouteLoader: React.FC = () => (
@@ -129,11 +130,10 @@ const Dashboard = () => {
 const queryClient = new QueryClient();
 
 const App: React.FC = () => {
-  const fetchMe = useAuthStore((state) => state.fetchMe);
-
   useEffect(() => {
+    const { fetchMe } = useAuthStore.getState();
     fetchMe();
-  }, [fetchMe]);
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -141,6 +141,14 @@ const App: React.FC = () => {
         <Suspense fallback={<RouteLoader />}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/analysis/chat"
+              element={(
+                <PrivateRoute>
+                  <AnalysisChatWindowPage />
+                </PrivateRoute>
+              )}
+            />
             
             <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
               <Route path="/" element={<Dashboard />} />
