@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import axios from 'axios';
 import { 
@@ -16,8 +16,6 @@ import {
   ArrowRight,
   ShieldCheck,
   Flag,
-  Mic,
-  Square,
   Wrench,
   Thermometer,
   Siren,
@@ -73,44 +71,6 @@ const SEVERITY_PRIORITY: Record<string, number> = {
   medium: 2,
   low: 1,
 };
-
-type SpeechRecognitionAlternativeLike = {
-  transcript: string;
-};
-
-type SpeechRecognitionResultLike = {
-  0: SpeechRecognitionAlternativeLike;
-  isFinal?: boolean;
-  length: number;
-};
-
-type SpeechRecognitionEventLike = {
-  results: ArrayLike<SpeechRecognitionResultLike>;
-};
-
-type SpeechRecognitionErrorEventLike = {
-  error: string;
-};
-
-type SpeechRecognitionInstance = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
-  onend: (() => void) | null;
-};
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
-
-declare global {
-  interface Window {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  }
-}
 
 const getApiErrorMessage = (error: unknown, fallback: string) => {
   if (axios.isAxiosError(error)) {
@@ -467,31 +427,13 @@ const getQuickSnapshotItems = (
   return [functionItem, heatItem, urgencyItem, workbenchItem];
 };
 
-const getSpeechRecognitionErrorMessage = (error: string) => {
-  switch (error) {
-    case 'not-allowed':
-    case 'service-not-allowed':
-      return 'Mikrofonzugriff wurde blockiert. Bitte Browserberechtigung freigeben.';
-    case 'no-speech':
-      return 'Keine Sprache erkannt. Bitte noch einmal sprechen.';
-    case 'audio-capture':
-      return 'Kein Mikrofon verfügbar oder das Gerät liefert kein Audiosignal.';
-    case 'network':
-      return 'Die Spracherkennung konnte keine Verbindung herstellen.';
-    default:
-      return 'Die Spracheingabe konnte nicht gestartet werden.';
-  }
-};
-
 const AnalysisPage: React.FC = () => {
   const { user } = useAuthStore();
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const speechBaseNoteRef = useRef('');
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
   const [selectedRange, setSelectedRange] = useState('24h');
   const [selectedIssue, setSelectedIssue] = useState('quick-check');
-  const [problemNote, setProblemNote] = useState('');
+  const [problemNote] = useState('');
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [deepAnalysisResult, setDeepAnalysisResult] = useState<DeepAnalysisResponse | null>(null);
   const [showDetailedResults, setShowDetailedResults] = useState(false);
@@ -500,19 +442,6 @@ const AnalysisPage: React.FC = () => {
   const [manufacturer, setManufacturer] = useState('');
   const [heatPumpType, setHeatPumpType] = useState('');
   const [formError, setFormError] = useState('');
-  const [isListening, setIsListening] = useState(false);
-  const [speechError, setSpeechError] = useState('');
-
-  const speechRecognitionApi = typeof window !== 'undefined'
-    ? window.SpeechRecognition ?? window.webkitSpeechRecognition
-    : undefined;
-  const speechSupported = Boolean(speechRecognitionApi);
-
-  useEffect(() => {
-    return () => {
-      recognitionRef.current?.stop();
-    };
-  }, []);
 
   // 2. Load Devices
   const { data: devices, isLoading: isDevicesLoading } = useQuery({
@@ -547,8 +476,6 @@ const AnalysisPage: React.FC = () => {
   });
 
   const handleStartAnalysis = () => {
-    recognitionRef.current?.stop();
-    setSpeechError('');
     setAnalysisResult(null);
     setDeepAnalysisResult(null);
     setShowDetailedResults(false);
@@ -598,56 +525,6 @@ const AnalysisPage: React.FC = () => {
   const openDeepAnalysisModal = () => {
     setFormError('');
     setShowDeepAnalysisModal(true);
-  };
-
-  const startSpeechInput = () => {
-    if (!speechRecognitionApi) {
-      setSpeechError('Dieser Browser unterstützt keine Spracheingabe. Empfohlen: aktuelles Chrome oder Edge.');
-      return;
-    }
-
-    if (isListening) {
-      return;
-    }
-
-    speechBaseNoteRef.current = problemNote.trim();
-    setSpeechError('');
-
-    const recognition = new speechRecognitionApi();
-    recognition.lang = 'de-DE';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0]?.transcript ?? '')
-        .join(' ')
-        .trim();
-
-      const mergedText = [speechBaseNoteRef.current, transcript].filter(Boolean).join(' ').trim();
-      setProblemNote(mergedText);
-    };
-
-    recognition.onerror = (event) => {
-      setSpeechError(getSpeechRecognitionErrorMessage(event.error));
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-    setIsListening(true);
-    recognition.start();
-  };
-
-  const stopSpeechInput = () => {
-    if (!isListening) {
-      return;
-    }
-
-    recognitionRef.current?.stop();
   };
 
   const handleOpenChatWindow = () => {
