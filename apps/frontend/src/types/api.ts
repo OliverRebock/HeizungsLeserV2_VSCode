@@ -21,7 +21,6 @@ export interface Tenant {
   created_at: string;
   updated_at: string;
   influx_bucket?: string;
-  influx_token?: string;
 }
 
 export interface Device {
@@ -31,7 +30,6 @@ export interface Device {
   slug: string;
   source_type: string;
   influx_database_name: string;
-  influx_token?: string;
   retention_policy?: string;
   source_config?: Record<string, any>;
   is_active: boolean;
@@ -39,6 +37,10 @@ export interface Device {
   last_seen?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface DeviceWithToken extends Device {
+  influx_token?: string;
 }
 
 export interface Entity {

@@ -10,6 +10,7 @@ from app.core.security import get_password_hash
 async def get_user(db: AsyncSession, user_id: int) -> Optional[User]:
     result = await db.execute(
         select(User)
+        .execution_options(populate_existing=True)
         .options(selectinload(User.tenant_links).selectinload(UserTenantLink.tenant))
         .where(User.id == user_id)
     )
@@ -18,6 +19,7 @@ async def get_user(db: AsyncSession, user_id: int) -> Optional[User]:
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
     result = await db.execute(
         select(User)
+        .execution_options(populate_existing=True)
         .options(selectinload(User.tenant_links).selectinload(UserTenantLink.tenant))
         .where(User.email == email)
     )
@@ -26,6 +28,7 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
 async def get_users(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[User]:
     result = await db.execute(
         select(User)
+        .execution_options(populate_existing=True)
         .options(selectinload(User.tenant_links).selectinload(UserTenantLink.tenant))
         .offset(skip)
         .limit(limit)
@@ -36,6 +39,7 @@ async def get_users_by_tenant(db: AsyncSession, tenant_id: int, skip: int = 0, l
     # Join with UserTenantLink
     stmt = (
         select(User)
+        .execution_options(populate_existing=True)
         .options(selectinload(User.tenant_links).selectinload(UserTenantLink.tenant))
         .join(UserTenantLink, User.id == UserTenantLink.user_id)
         .where(UserTenantLink.tenant_id == tenant_id)

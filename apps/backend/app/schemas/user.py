@@ -1,5 +1,7 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, List
+
+from app.core.password_policy import validate_password_strength
 
 class UserTenantRole(BaseModel):
     tenant_id: int
@@ -20,13 +22,30 @@ class UserCreate(UserBase):
     tenant_id: Optional[int] = None
     role: Optional[str] = "tenant_user"
 
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_password_strength(value)
+
 class UserUpdate(UserBase):
     password: Optional[str] = None
     role: Optional[str] = None
     tenant_id: Optional[int] = None
 
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return validate_password_strength(value)
+
 class UserPasswordReset(BaseModel):
     new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
 class User(UserBase):
     id: int

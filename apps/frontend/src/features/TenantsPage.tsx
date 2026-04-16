@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
-import type { Tenant, Device } from '../types/api';
+import type { Tenant, Device, DeviceWithToken } from '../types/api';
 import { Users, Plus, ChevronDown, ChevronRight, Trash2, Key, Database, Copy, Check } from 'lucide-react';
 
 const TenantsPage: React.FC = () => {
@@ -180,7 +180,7 @@ const TenantDevicesRow: React.FC<{ tenantId: number; tenantName: string }> = ({ 
     
     setLoadingTokens(prev => ({ ...prev, [deviceId]: true }));
     try {
-      const response = await api.get<Device>(`/devices/${deviceId}/token`);
+      const response = await api.get<DeviceWithToken>(`/devices/${deviceId}/token`);
       if (response.data.influx_token) {
         setFullTokens(prev => ({ ...prev, [deviceId]: response.data.influx_token! }));
       }
@@ -351,11 +351,11 @@ const TenantDevicesRow: React.FC<{ tenantId: number; tenantName: string }> = ({ 
                         </div>
                         <div className="flex items-center gap-2">
                           <code className="bg-white border border-slate-200 px-3 py-2 rounded text-xs font-mono text-blue-700 flex-1 break-all">
-                            {fullTokens[d.id] || d.influx_token || 'Token wird beim Anlegen generiert'}
+                            {fullTokens[d.id] || 'Token wird beim Anlegen generiert'}
                           </code>
-                          {(fullTokens[d.id] || d.influx_token) && (
+                          {fullTokens[d.id] && (
                             <button 
-                              onClick={() => handleCopy(fullTokens[d.id] || d.influx_token!, `token-dev-${d.id}`)}
+                              onClick={() => handleCopy(fullTokens[d.id], `token-dev-${d.id}`)}
                               className="p-2 bg-white border border-slate-200 rounded-lg hover:border-blue-300 hover:text-blue-600 transition h-fit self-start"
                               title="Token kopieren"
                             >

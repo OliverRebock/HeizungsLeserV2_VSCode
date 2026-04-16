@@ -33,7 +33,7 @@ async def test_tenant_admin_can_manage_own_tenant_user(client: AsyncClient, tena
     # Create a user in the same tenant
     user_data = {
         "email": "new_user@example.com",
-        "password": "password123",
+        "password": "StrongPass123!",
         "full_name": "New User",
         "tenant_id": test_tenant.id,
         "role": "tenant_user"
@@ -43,8 +43,92 @@ async def test_tenant_admin_can_manage_own_tenant_user(client: AsyncClient, tena
     
     user_id = response.json()["id"]
     # Can also reset password
-    response = await client.post(f"/api/v1/users/{user_id}/reset-password", json={"new_password": "newpassword"}, headers=headers)
+    response = await client.post(f"/api/v1/users/{user_id}/reset-password", json={"new_password": "EvenStronger123!"}, headers=headers)
     assert response.status_code == 200
+
+@pytest.mark.asyncio
+async def test_tenant_admin_cannot_assign_user_to_other_tenant(client: AsyncClient, tenant_admin, test_tenant, db_session):
+    from app.models.tenant import Tenant
+    from .conftest import create_test_user
+
+    other_tenant = Tenant(name="Other Update", slug="other-update")
+    db_session.add(other_tenant)
+    await db_session.commit()
+    await db_session.refresh(other_tenant)
+
+    managed_user = await create_test_user(db_session, "managed@example.com", role="tenant_user", tenant_id=test_tenant.id)
+
+    headers = get_auth_header(tenant_admin.id)
+    response = await client.put(
+        f"/api/v1/users/{managed_user.id}",
+        json={"tenant_id": other_tenant.id, "role": "tenant_user"},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+@pytest.mark.asyncio
+async def test_tenant_admin_cannot_delete_multi_tenant_user(client: AsyncClient, tenant_admin, test_tenant, db_session):
+    from app.models.tenant import Tenant
+    from app.models.user import UserTenantLink
+    from .conftest import create_test_user
+
+    other_tenant = Tenant(name="Other Delete", slug="other-delete")
+    db_session.add(other_tenant)
+    await db_session.commit()
+    await db_session.refresh(other_tenant)
+
+    target_user = await create_test_user(db_session, "multitenant-delete@example.com", role="tenant_user", tenant_id=test_tenant.id)
+    db_session.add(UserTenantLink(user_id=target_user.id, tenant_id=other_tenant.id, role="tenant_user"))
+    await db_session.commit()
+
+    headers = get_auth_header(tenant_admin.id)
+    response = await client.delete(f"/api/v1/users/{target_user.id}", headers=headers)
+    assert response.status_code == 403
+
+@pytest.mark.asyncio
+async def test_tenant_admin_cannot_reset_password_for_multi_tenant_user(client: AsyncClient, tenant_admin, test_tenant, db_session):
+    from app.models.tenant import Tenant
+    from app.models.user import UserTenantLink
+    from .conftest import create_test_user
+
+    other_tenant = Tenant(name="Other Reset", slug="other-reset")
+    db_session.add(other_tenant)
+    await db_session.commit()
+    await db_session.refresh(other_tenant)
+
+    target_user = await create_test_user(db_session, "multitenant-reset@example.com", role="tenant_user", tenant_id=test_tenant.id)
+    db_session.add(UserTenantLink(user_id=target_user.id, tenant_id=other_tenant.id, role="tenant_user"))
+    await db_session.commit()
+
+    headers = get_auth_header(tenant_admin.id)
+    response = await client.post(
+        f"/api/v1/users/{target_user.id}/reset-password",
+        json={"new_password": "AnotherStrong123!"},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+@pytest.mark.asyncio
+async def test_tenant_admin_only_sees_shared_tenant_assignments(client: AsyncClient, tenant_admin, test_tenant, db_session):
+    from app.models.tenant import Tenant
+    from app.models.user import UserTenantLink
+    from .conftest import create_test_user
+
+    other_tenant = Tenant(name="Other Visible", slug="other-visible")
+    db_session.add(other_tenant)
+    await db_session.commit()
+    await db_session.refresh(other_tenant)
+
+    target_user = await create_test_user(db_session, "visible@example.com", role="tenant_user", tenant_id=test_tenant.id)
+    db_session.add(UserTenantLink(user_id=target_user.id, tenant_id=other_tenant.id, role="tenant_user"))
+    await db_session.commit()
+
+    headers = get_auth_header(tenant_admin.id)
+    response = await client.get(f"/api/v1/users/{target_user.id}", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["tenants"]) == 1
+    assert body["tenants"][0]["tenant_id"] == test_tenant.id
 
 @pytest.mark.asyncio
 async def test_tenant_admin_cannot_manage_other_tenant_user(client: AsyncClient, tenant_admin, db_session):

@@ -65,7 +65,7 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     app.dependency_overrides.clear()
 
 async def create_test_user(db: AsyncSession, email: str, role: str = None, tenant_id: int = None, is_superuser: bool = False):
-    hashed_password = security.get_password_hash("testpass")
+    hashed_password = security.get_password_hash("TestPass123!")
     user = User(
         email=email,
         hashed_password=hashed_password,

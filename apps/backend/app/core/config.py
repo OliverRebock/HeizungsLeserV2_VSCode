@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     SECRET_KEY: str = "DEV_SECRET_KEY_DO_NOT_USE_IN_PROD"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
+    LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = 5
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300
+    LOGIN_LOCKOUT_SECONDS: int = 900
+    PASSWORD_MIN_LENGTH: int = 12
 
     # Postgres
     POSTGRES_USER: str = "heitleser_user"

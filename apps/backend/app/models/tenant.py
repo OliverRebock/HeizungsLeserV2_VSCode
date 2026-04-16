@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List
 from sqlalchemy import String, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base_class import Base, TimestampMixin
@@ -16,8 +16,8 @@ class Tenant(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     
     # InfluxDB Integration
-    influx_bucket: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    influx_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    influx_bucket: Mapped[str] = mapped_column(String(255), nullable=True)
+    influx_token: Mapped[str] = mapped_column(String(255), nullable=True)
 
     users: Mapped[List["User"]] = relationship(
         secondary="user_tenant_roles", viewonly=True

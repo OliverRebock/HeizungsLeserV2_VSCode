@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.db.session import get_db
-from app.schemas.tenant import Tenant, TenantCreate, TenantUpdate
+from app.schemas.tenant import Tenant, TenantCreate, TenantUpdate, TenantWithToken
 from app.services import tenant as tenant_service
 from app.models.user import User
 
@@ -40,6 +40,19 @@ async def read_tenant(
 ):
     """Get tenant by ID."""
     await deps.check_tenant_access(tenant_id, current_user, db)
+    db_tenant = await tenant_service.get_tenant(db, tenant_id=tenant_id)
+    if not db_tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return db_tenant
+
+
+@router.get("/{tenant_id}/token", response_model=TenantWithToken)
+async def read_tenant_with_token(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_superuser),
+):
+    """Get tenant by ID including unmasked Influx token. (Admin only)"""
     db_tenant = await tenant_service.get_tenant(db, tenant_id=tenant_id)
     if not db_tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")

@@ -35,7 +35,7 @@ async def test_devices_list_and_detail_contract(client: AsyncClient, platform_ad
     ]
     for field in expected_fields:
         assert field in dev, f"Missing field {field} in Device response"
-    assert "influx_token" in dev
+    assert "influx_token" not in dev
 
 @pytest.mark.asyncio
 async def test_users_list_contract_and_permissions(client: AsyncClient, platform_admin):

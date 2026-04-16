@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from sqlalchemy import String, ForeignKey, Boolean, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base_class import Base, TimestampMixin
@@ -17,11 +17,11 @@ class Device(Base, TimestampMixin):
     # Abstraction for data source
     source_type: Mapped[str] = mapped_column(String(50), default="influxdb_v2")
     influx_database_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    influx_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    retention_policy: Mapped[Optional[str]] = mapped_column(String(100))
+    influx_token: Mapped[str] = mapped_column(String(255), nullable=True)
+    retention_policy: Mapped[str] = mapped_column(String(100), nullable=True)
     
     # Store additional config if needed
-    source_config: Mapped[Optional[dict]] = mapped_column(JSON)
+    source_config: Mapped[dict] = mapped_column(JSON, nullable=True)
     
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
