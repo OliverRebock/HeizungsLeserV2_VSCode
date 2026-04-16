@@ -5,6 +5,7 @@ from influxdb_client.domain.permission import Permission
 from influxdb_client.domain.permission_resource import PermissionResource
 from influxdb_client.domain.authorization import Authorization
 from app.core.config import settings
+from app.core.query_validation import FluxQueryValidator, QueryValidationError
 from app.models.device import Device
 from app.schemas.influx import Entity, DataPoint, TimeSeriesResponse, DashboardEntityData, DashboardDataPoint
 import json
@@ -690,11 +691,22 @@ class InfluxService:
         end_dt: datetime,
     ) -> Dict[str, Any]:
         metadata: Dict[str, Any] = {}
+        
+        try:
+            # Validate and sanitize inputs
+            eid_validated = FluxQueryValidator.validate_entity_id(eid)
+            bucket_validated = FluxQueryValidator.validate_bucket_name(bucket)
+            eid_escaped = FluxQueryValidator.escape_flux_string_literal(eid_validated)
+            
+        except QueryValidationError as exc:
+            logger.warning(f"Query validation failed for entity_id '{eid}': {exc}")
+            return metadata
+        
         end_ts = self._format_utc_timestamp(end_dt)
         metadata_query = f'''
-            from(bucket: "{bucket}")
+            from(bucket: "{bucket_validated}")
             |> range(start: 0, stop: time(v: "{end_ts}"))
-            |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+            |> filter(fn: (r) => r["_measurement"] == "{eid_escaped}" or r["entity_id"] == "{eid_escaped}")
             |> filter(fn: (r) =>
                 r["_field"] == "friendly_name_str" or
                 r["_field"] == "unit_of_measurement_str" or
@@ -735,11 +747,21 @@ class InfluxService:
         eid: str,
         start_dt: datetime,
     ) -> Optional[Dict[str, Any]]:
+        try:
+            # Validate and sanitize inputs
+            eid_validated = FluxQueryValidator.validate_entity_id(eid)
+            bucket_validated = FluxQueryValidator.validate_bucket_name(bucket)
+            eid_escaped = FluxQueryValidator.escape_flux_string_literal(eid_validated)
+            
+        except QueryValidationError as exc:
+            logger.warning(f"Query validation failed for entity_id '{eid}': {exc}")
+            return None
+        
         start_ts = self._format_utc_timestamp(start_dt)
         last_query = f'''
-            from(bucket: "{bucket}")
+            from(bucket: "{bucket_validated}")
             |> range(start: 0, stop: time(v: "{start_ts}"))
-            |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+            |> filter(fn: (r) => r["_measurement"] == "{eid_escaped}" or r["entity_id"] == "{eid_escaped}")
             |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
             |> last()
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -766,12 +788,22 @@ class InfluxService:
         start_dt: datetime,
         end_dt: datetime,
     ) -> List[Dict[str, Any]]:
+        try:
+            # Validate and sanitize inputs
+            eid_validated = FluxQueryValidator.validate_entity_id(eid)
+            bucket_validated = FluxQueryValidator.validate_bucket_name(bucket)
+            eid_escaped = FluxQueryValidator.escape_flux_string_literal(eid_validated)
+            
+        except QueryValidationError as exc:
+            logger.warning(f"Query validation failed for entity_id '{eid}': {exc}")
+            return []
+        
         start_ts = self._format_utc_timestamp(start_dt)
         end_ts = self._format_utc_timestamp(end_dt)
         flux_query = f'''
-            from(bucket: "{bucket}")
+            from(bucket: "{bucket_validated}")
             |> range(start: time(v: "{start_ts}"), stop: time(v: "{end_ts}"))
-            |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+            |> filter(fn: (r) => r["_measurement"] == "{eid_escaped}" or r["entity_id"] == "{eid_escaped}")
             |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
             |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
@@ -1146,6 +1178,13 @@ class InfluxService:
         - a lightweight 24h sparkline aligned with the chart semantics
         - freshness information
         """
+        try:
+            # Validate all entity_ids upfront to prevent injection attacks
+            entity_ids_validated = FluxQueryValidator.validate_entity_ids(entity_ids)
+        except QueryValidationError as exc:
+            logger.error(f"Entity ID validation failed: {exc}")
+            raise ValueError(f"Invalid entity IDs: {exc}") from exc
+        
         bucket = device.influx_database_name or settings.INFLUXDB_BUCKET
         query_api = self.client.query_api()
         end_dt = datetime.now(timezone.utc)
@@ -1154,8 +1193,12 @@ class InfluxService:
         end_ts = self._format_utc_timestamp(end_dt)
         results = []
 
-        for eid in entity_ids:
+        for eid in entity_ids_validated:
             try:
+                # Escape entity ID for safe Flux query construction
+                eid_escaped = FluxQueryValidator.escape_flux_string_literal(eid)
+                bucket_validated = FluxQueryValidator.validate_bucket_name(bucket)
+                
                 domain = eid.split('.')[0] if '.' in eid else "sensor"
                 latest_samples = []
                 metadata = self._read_entity_metadata(query_api, bucket, eid, end_dt)
@@ -1166,9 +1209,9 @@ class InfluxService:
                 options = metadata.get("options")
 
                 last_query = f'''
-                    from(bucket: "{bucket}")
+                    from(bucket: "{bucket_validated}")
                     |> range(start: 0)
-                    |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                    |> filter(fn: (r) => r["_measurement"] == "{eid_escaped}" or r["entity_id"] == "{eid_escaped}")
                     |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
                     |> last()
                     |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -1215,9 +1258,9 @@ class InfluxService:
                 if data_kind == "numeric":
                     aggregated_samples = []
                     sparkline_query = f'''
-                        from(bucket: "{bucket}")
+                        from(bucket: "{bucket_validated}")
                         |> range(start: time(v: "{start_ts}"), stop: time(v: "{end_ts}"))
-                        |> filter(fn: (r) => r["_measurement"] == "{eid}" or r["entity_id"] == "{eid}")
+                        |> filter(fn: (r) => r["_measurement"] == "{eid_escaped}" or r["entity_id"] == "{eid_escaped}")
                         |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "state")
                         |> map(fn: (r) => ({{ r with _value: float(v: r._value) }}))
                         |> aggregateWindow(every: 30m, fn: {agg_fn}, createEmpty: false)
@@ -1308,6 +1351,13 @@ class InfluxService:
         Fetch timeseries data from InfluxDB 2 using Flux.
         Returns a dict containing 'series' and 'range_resolved'.
         """
+        try:
+            # Validate all entity_ids upfront to prevent injection attacks
+            entity_ids_validated = FluxQueryValidator.validate_entity_ids(entity_ids)
+        except QueryValidationError as exc:
+            logger.error(f"Entity ID validation failed: {exc}")
+            raise ValueError(f"Invalid entity IDs: {exc}") from exc
+        
         bucket = device.influx_database_name or settings.INFLUXDB_BUCKET
         query_api = self.client.query_api()
         results = []
@@ -1316,7 +1366,7 @@ class InfluxService:
         resolved_from = self._format_utc_timestamp(start_dt)
         resolved_to = self._format_utc_timestamp(end_dt)
 
-        for eid in entity_ids:
+        for eid in entity_ids_validated:
             default_domain = eid.split('.')[0] if '.' in eid else "sensor"
             metadata = self._read_entity_metadata(query_api, bucket, eid, end_dt)
             previous_sample = self._read_last_sample_before(query_api, bucket, eid, start_dt)
