@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -14,7 +15,7 @@ from app.core.heatpump_entity_mapping import (
     get_manufacturer_aliases,
 )
 from app.models.device import Device
-from app.schemas.analysis import HeatPumpChatRequest, HeatPumpChatResponse
+from app.schemas.analysis import ChatTurn, HeatPumpChatRequest, HeatPumpChatResponse
 from app.schemas.influx import Entity, TimeSeriesResponse
 from app.services.influx import influx_service
 
@@ -49,12 +50,14 @@ class HeatPumpChatService:
         if not question:
             raise ValueError("Bitte eine Frage eingeben.")
 
+        resolved_question, forced_intent = self._resolve_follow_up_question(question, request.history)
+
         start_dt, end_dt = self._resolve_range(request.start, request.end)
         start_iso = start_dt.isoformat().replace("+00:00", "Z")
         end_iso = end_dt.isoformat().replace("+00:00", "Z")
 
         entities = await influx_service.get_entities(device)
-        intent = await self._detect_intent(question)
+        intent = forced_intent or await self._detect_intent(resolved_question)
 
         source_config = device.source_config or {}
         manufacturer = (device.manufacturer or source_config.get("manufacturer") or "").strip()
@@ -62,7 +65,7 @@ class HeatPumpChatService:
         if heat_pump_type:
             logger.debug("Using heat pump type context for chat selection: %s", heat_pump_type)
 
-        selected_entities = self._select_entities(intent, question, entities, manufacturer=manufacturer)
+        selected_entities = self._select_entities(intent, resolved_question, entities, manufacturer=manufacturer)
 
         # Fallback on broad operation intent, but still bounded entity count.
         if not selected_entities:
@@ -72,8 +75,8 @@ class HeatPumpChatService:
         raw = await influx_service.get_timeseries(device, selected_entities, start_iso, end_iso)
         series: List[TimeSeriesResponse] = raw.get("series", [])
 
-        facts = self._build_facts(intent, question, series)
-        answer = await self._generate_answer(request, intent, facts, selected_entities, start_iso, end_iso)
+        facts = self._build_facts(intent, resolved_question, series)
+        answer = await self._generate_answer(request, intent, facts, selected_entities, start_iso, end_iso, resolved_question)
 
         return HeatPumpChatResponse(
             intent=intent,
@@ -88,6 +91,58 @@ class HeatPumpChatService:
                 "timezone": self.display_timezone_name,
             },
         )
+
+    def _resolve_follow_up_question(self, question: str, history: List[ChatTurn]) -> tuple[str, Optional[str]]:
+        """Resolve shorthand follow-ups like 'mach 2' against the last assistant recommendations."""
+        lowered = question.strip().lower()
+        match = re.match(r"^(?:mach|gib|zeige|nimm|tu)?\s*(?:punkt\s*)?(\d)\s*$", lowered)
+        if not match:
+            return question, None
+
+        point = match.group(1)
+        recommendation = self._extract_recommendation_from_history(history, point)
+        if not recommendation:
+            return question, None
+
+        resolved = f"Fuehre Empfehlung Punkt {point} aus: {recommendation}."
+        forced_intent: Optional[str] = None
+
+        recommendation_lower = recommendation.lower()
+        if point == "2" and any(
+            marker in recommendation_lower
+            for marker in [
+                "ereignisprotokoll",
+                "fehlerzeitpunkt",
+                "11:45",
+                "11:55",
+                "trenddaten",
+                "fehler",
+            ]
+        ):
+            resolved += " Lies die Werte zum Zeitpunkt des Fehlers aus und bewerte den Verlauf rund um den Fehlerzeitpunkt."
+            forced_intent = "anomaly"
+
+        return resolved, forced_intent
+
+    def _extract_recommendation_from_history(self, history: List[ChatTurn], point: str) -> Optional[str]:
+        recommendation_pattern = re.compile(rf"^\s*{re.escape(point)}\.\s*(.+?)\s*$", re.IGNORECASE)
+
+        for turn in reversed(history):
+            if turn.role.lower() != "assistant":
+                continue
+
+            for line in turn.content.splitlines():
+                match = recommendation_pattern.match(line)
+                if not match:
+                    continue
+
+                candidate = match.group(1).strip()
+                candidate = candidate.strip("-* ")
+                candidate = candidate.replace("**", "")
+                if candidate:
+                    return candidate
+
+        return None
 
     def _resolve_range(self, start: Optional[datetime], end: Optional[datetime]) -> tuple[datetime, datetime]:
         now = datetime.now(timezone.utc)
@@ -160,6 +215,7 @@ class HeatPumpChatService:
         question_is_error_focused = self._question_is_error_focused(q)
         question_is_time_focused = self._question_is_time_focused(q)
         question_is_hot_water_focused = self._question_is_hot_water_focused(q)
+        question_requests_error_window = self._question_requests_error_window_readout(q)
         question_asks_for_duration = any(token in q for token in ["wie lange", "dauer", "lang ist", "länge"])
         question_asks_for_count = any(token in q for token in ["wie viele", "wie oft", "anzahl", "zahl"])
         question_tokens = [token.strip(".,!?;:\"'()[]{}") for token in q.split() if token.strip()]
@@ -195,6 +251,9 @@ class HeatPumpChatService:
 
             if question_is_time_focused and question_is_hot_water_focused and self._is_dhw_timing_entity_text(text):
                 score += 9
+
+            if question_requests_error_window and self._is_fault_window_measurement_text(text):
+                score += 8
             
             # For duration questions about heating, boost heating-related entities
             if question_is_time_focused and question_asks_for_duration and "geheizt" in q:
@@ -248,13 +307,25 @@ class HeatPumpChatService:
                     selected.append(entity_id)
                     seen.add(entity_id)
 
+        if question_requests_error_window:
+            for entity in entities:
+                text = f"{entity.entity_id} {entity.friendly_name or ''}".lower()
+                if self._is_fault_window_measurement_text(text) and entity.entity_id not in seen:
+                    selected.append(entity.entity_id)
+                    seen.add(entity.entity_id)
+                if len(selected) >= max(profile.fallback_entity_limit, 18):
+                    break
+
         for _, entity_id in scored:
             if entity_id in seen:
                 continue
             selected.append(entity_id)
             seen.add(entity_id)
             # For duration questions, allow more entities to be selected
-            limit = 14 if (question_is_time_focused and question_asks_for_duration) else profile.fallback_entity_limit
+            if question_requests_error_window:
+                limit = max(profile.fallback_entity_limit, 18)
+            else:
+                limit = 14 if (question_is_time_focused and question_asks_for_duration) else profile.fallback_entity_limit
             if len(selected) >= limit:
                 break
 
@@ -377,6 +448,46 @@ class HeatPumpChatService:
             ]
         )
 
+    def _question_requests_error_window_readout(self, question_lower: str) -> bool:
+        asks_for_values = any(token in question_lower for token in ["wert", "messwert", "ausles", "lies", "lese"])
+        asks_for_error_time = any(
+            token in question_lower
+            for token in [
+                "zeitpunkt des fehlers",
+                "zeitpunkt vom fehler",
+                "zu dem zeitpunkt",
+                "zum zeitpunkt",
+                "beim fehler",
+                "rund um den fehler",
+            ]
+        )
+        return self._question_is_error_focused(question_lower) and asks_for_values and asks_for_error_time
+
+    def _is_fault_window_measurement_text(self, entity_text_lower: str) -> bool:
+        measurement_markers = [
+            "temperatur",
+            "temperature",
+            "vorlauf",
+            "ruecklauf",
+            "rücklauf",
+            "flow",
+            "durchfluss",
+            "pressure",
+            "druck",
+            "setpoint",
+            "soll",
+            "target",
+            "modulation",
+            "leistung",
+            "compressor",
+            "verdichter",
+            "pump",
+            "pumpe",
+            "valve",
+            "ventil",
+        ]
+        return any(marker in entity_text_lower for marker in measurement_markers)
+
     def _fallback_entities(self, intent: str, entities: List[Entity]) -> List[str]:
         profile = get_intent_profile(intent)
 
@@ -419,10 +530,13 @@ class HeatPumpChatService:
         q = question.lower()
         question_is_time_focused = self._question_is_time_focused(q)
         question_is_hot_water_focused = self._question_is_hot_water_focused(q)
+        question_requests_error_window = self._question_requests_error_window_readout(q)
         question_asks_for_duration = any(token in q for token in ["wie lange", "dauer", "lang ist", "länge"])
         question_asks_for_count = any(token in q for token in ["wie viele", "wie oft", "anzahl", "zahl"])
         
-        if question_is_time_focused and question_is_hot_water_focused:
+        if question_requests_error_window:
+            facts.extend(self._extract_fault_window_values(series)[:12])
+        elif question_is_time_focused and question_is_hot_water_focused:
             facts.extend(self._extract_dhw_heating_events(series)[:8])
         elif question_is_time_focused and question_asks_for_duration:
             # For duration questions, extract operating phases
@@ -481,6 +595,55 @@ class HeatPumpChatService:
                 )
 
         return summaries
+
+    def _extract_fault_window_values(self, series: List[TimeSeriesResponse]) -> List[str]:
+        anchor = self._find_fault_anchor(series)
+        if anchor is None:
+            return ["Kein Fehlerzeitpunkt im gewaehlten Zeitraum gefunden."]
+
+        anchor_ts, error_label, error_code = anchor
+        facts = [f"Fehlerzeitpunkt erkannt: {error_label} Code {error_code} um {self._format_ts(anchor_ts)}"]
+
+        measurement_candidates: List[tuple[float, str]] = []
+        tolerance_seconds = 5 * 60
+
+        for candidate in series:
+            entity_text = f"{candidate.entity_id} {candidate.friendly_name or ''}".lower()
+            if self._is_error_entity_text(entity_text):
+                continue
+
+            nearest = self._find_nearest_point(candidate, anchor_ts)
+            if nearest is None:
+                continue
+
+            point, point_ts = nearest
+            delta_seconds = abs((point_ts - anchor_ts).total_seconds())
+            if delta_seconds > tolerance_seconds:
+                continue
+
+            point_value = point.state
+            if point.value is not None:
+                point_value = f"{float(point.value):.1f}"
+            if point_value in (None, ""):
+                continue
+
+            unit = candidate.unit_of_measurement or candidate.meta.get("unit_of_measurement") or ""
+            suffix = f" {unit}" if unit else ""
+            display_name = self._resolve_display_name(candidate)
+            measurement_candidates.append(
+                (
+                    delta_seconds,
+                    f"{display_name} ({candidate.entity_id}) beim Fehlerzeitpunkt: {point_value}{suffix} um {self._format_ts(point_ts)} ({self._format_time_offset(delta_seconds)})",
+                )
+            )
+
+        measurement_candidates.sort(key=lambda item: (item[0], item[1]))
+        facts.extend([fact for _, fact in measurement_candidates[:10]])
+
+        if len(facts) == 1:
+            facts.append("Keine Messwerte innerhalb von +/-5 Minuten rund um den Fehlerzeitpunkt gefunden.")
+
+        return facts
 
     def _extract_operating_phases(self, series: List[TimeSeriesResponse]) -> List[str]:
         """Extract heating/cooling operating phases and their durations for duration questions."""
@@ -755,6 +918,101 @@ class HeatPumpChatService:
 
         return ramps
 
+    def _find_fault_anchor(self, series: List[TimeSeriesResponse]) -> Optional[tuple[datetime, str, str]]:
+        latest_anchor: Optional[tuple[datetime, str, str]] = None
+
+        for candidate in series:
+            entity_text = f"{candidate.entity_id} {candidate.friendly_name or ''}".lower()
+            if not self._is_error_entity_text(entity_text):
+                continue
+
+            for point in candidate.points:
+                raw_state = point.state if point.state not in (None, "") else point.value
+                if raw_state in (None, ""):
+                    continue
+
+                raw_text = str(raw_state)
+                parsed_code = self._extract_error_code(raw_text)
+                if parsed_code is None and not self._question_is_error_focused(raw_text.lower()):
+                    continue
+
+                point_ts = self._parse_point_ts(point.ts)
+                if point_ts is None:
+                    continue
+
+                embedded_error_ts = self._extract_error_timestamp_from_state(raw_text)
+                anchor_ts = embedded_error_ts or point_ts
+
+                display_name = self._resolve_display_name(candidate)
+                anchor = (anchor_ts, display_name, parsed_code or raw_text)
+                if latest_anchor is None or anchor_ts > latest_anchor[0]:
+                    latest_anchor = anchor
+
+        return latest_anchor
+
+    def _extract_error_code(self, raw_text: str) -> Optional[str]:
+        paren_match = re.search(r"\(([^)]+)\)", raw_text)
+        if paren_match:
+            return paren_match.group(1).strip()
+
+        alpha_num_match = re.search(r"\b([A-Z]\d{1,4}|\d{3,5})\b", raw_text)
+        if alpha_num_match:
+            return alpha_num_match.group(1).strip()
+
+        return None
+
+    def _extract_error_timestamp_from_state(self, raw_text: str) -> Optional[datetime]:
+        # Example formats inside error state strings:
+        # "--(6256) 03.04.2026 11:50 - now"
+        # "--(6256) 03.04.2026 11:51-03.04.2026 11:51"
+        match = re.search(r"(\d{2}\.\d{2}\.\d{4})\s*(\d{2}:\d{2})", raw_text)
+        if not match:
+            return None
+
+        dt_str = f"{match.group(1)} {match.group(2)}"
+        try:
+            local_naive = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
+        except ValueError:
+            return None
+
+        try:
+            if hasattr(self.display_timezone, "localize"):
+                # pytz timezone
+                localized = self.display_timezone.localize(local_naive)
+            else:
+                # zoneinfo timezone
+                localized = local_naive.replace(tzinfo=self.display_timezone)
+            return localized.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def _find_nearest_point(self, series: TimeSeriesResponse, anchor_ts: datetime) -> Optional[tuple[Any, datetime]]:
+        nearest: Optional[tuple[Any, datetime]] = None
+        nearest_delta: Optional[float] = None
+
+        for point in series.points:
+            point_ts = self._parse_point_ts(point.ts)
+            if point_ts is None:
+                continue
+            delta = abs((point_ts - anchor_ts).total_seconds())
+            if nearest is None or nearest_delta is None or delta < nearest_delta:
+                nearest = (point, point_ts)
+                nearest_delta = delta
+
+        return nearest
+
+    def _format_time_offset(self, delta_seconds: float) -> str:
+        if delta_seconds < 1:
+            return "Messpunkt exakt am Fehlerzeitpunkt"
+        if delta_seconds < 60:
+            return f"Abweichung {int(delta_seconds)} s"
+
+        minutes = int(delta_seconds // 60)
+        seconds = int(delta_seconds % 60)
+        if seconds == 0:
+            return f"Abweichung {minutes} min"
+        return f"Abweichung {minutes} min {seconds} s"
+
     def _parse_point_ts(self, ts: str) -> Optional[datetime]:
         try:
             normalized = ts.replace("Z", "+00:00")
@@ -793,9 +1051,11 @@ class HeatPumpChatService:
         entity_ids: List[str],
         start_iso: str,
         end_iso: str,
+        resolved_question: Optional[str] = None,
     ) -> str:
+        prompt_question = resolved_question or request.question
         if not self.openai_enabled:
-            return self._local_answer(request.question, intent, facts)
+            return self._local_answer(prompt_question, intent, facts)
 
         history = "\n".join([f"{turn.role}: {turn.content}" for turn in request.history[-6:]])
         system_prompt = (
@@ -811,7 +1071,7 @@ class HeatPumpChatService:
             f"Zeitraum: {start_iso} bis {end_iso}\n"
             f"Verwendete Entitaeten: {', '.join(entity_ids)}\n"
             f"Bisheriger Verlauf:\n{history or 'kein Verlauf'}\n\n"
-            f"Frage: {request.question}\n\n"
+            f"Frage: {prompt_question}\n\n"
             "Relevante Messfakten:\n"
             + "\n".join([f"- {fact}" for fact in facts])
             + "\n\nAntworte kurz in 4-8 Saetzen und nenne am Ende 1-3 konkrete Handlungsempfehlungen."
@@ -821,7 +1081,7 @@ class HeatPumpChatService:
             return await self._openai_chat_text(system_prompt, user_prompt, temperature=0.2)
         except Exception:
             logger.exception("OpenAI answer generation failed, using local fallback.")
-            return self._local_answer(request.question, intent, facts)
+            return self._local_answer(prompt_question, intent, facts)
 
     def _local_answer(self, question: str, intent: str, facts: List[str]) -> str:
         lines = [

@@ -1,5 +1,6 @@
 import pytest
 
+from app.schemas.analysis import ChatTurn
 from app.schemas.influx import DataPoint, Entity, TimeSeriesResponse
 from app.services.heatpump_chat_service import HeatPumpChatService
 
@@ -81,6 +82,36 @@ async def test_detect_intent_routes_colloquial_hot_water_question_to_hot_water()
     assert intent == "hot_water"
 
 
+def test_resolve_follow_up_question_maps_mach_2_to_error_window_request():
+    service = HeatPumpChatService()
+    history = [
+        ChatTurn(
+            role="assistant",
+            content=(
+                "Konkrete Empfehlungen:\n"
+                "1. **Fehlercode 6256 nachschlagen**\n"
+                "2. **Ereignisprotokoll um den 03.04.2026 11:45-11:55 Uhr pruefen**\n"
+                "3. **Trenddaten weiter beobachten**"
+            ),
+        )
+    ]
+
+    resolved, forced_intent = service._resolve_follow_up_question("mach 2", history)
+
+    assert "punkt 2" in resolved.lower()
+    assert "zeitpunkt des fehlers" in resolved.lower()
+    assert forced_intent == "anomaly"
+
+
+def test_resolve_follow_up_question_keeps_original_without_history_match():
+    service = HeatPumpChatService()
+
+    resolved, forced_intent = service._resolve_follow_up_question("mach 2", [])
+
+    assert resolved == "mach 2"
+    assert forced_intent is None
+
+
 def test_select_entities_for_time_focused_hot_water_includes_timeline_entities():
     service = HeatPumpChatService()
     entities = [
@@ -99,6 +130,28 @@ def test_select_entities_for_time_focused_hot_water_includes_timeline_entities()
     assert "boiler_tapwater_active" in selected
     assert "boiler_dhw_current_intern_temperature" in selected
     assert "boiler_dhw_starts_hp" in selected
+
+
+def test_select_entities_for_fault_window_readout_includes_measurement_context():
+    service = HeatPumpChatService()
+    entities = [
+        make_entity("boiler_last_error_code", "Boiler Letzter Fehler"),
+        make_entity("boiler_current_flow_temperature", "Boiler Vorlauf"),
+        make_entity("boiler_return_temperature", "Boiler Ruecklauf"),
+        make_entity("mixer_hc2_setpoint_flow_temperature", "HK2 Soll Vorlauf"),
+        make_entity("thermostat_hc2_target_flow_temperature", "HK2 Ziel Vorlauf"),
+    ]
+
+    selected = service._select_entities(
+        "anomaly",
+        "lies die werte zum zeitpunkt des fehlers aus",
+        entities,
+    )
+
+    assert "boiler_last_error_code" in selected
+    assert "boiler_current_flow_temperature" in selected
+    assert "boiler_return_temperature" in selected
+    assert "mixer_hc2_setpoint_flow_temperature" in selected
 
 
 def test_build_facts_for_time_focused_hot_water_contains_event_windows():
@@ -275,6 +328,107 @@ def test_build_facts_for_temperature_comparison_shows_spreizung():
     facts_text = " ".join(facts).lower()
     # Should mention temperatures or spreizung
     assert any(word in facts_text for word in ["vorlauf", "rücklauf", "temperatur", "spreiz"])
+
+
+def test_build_facts_for_fault_window_readout_returns_nearest_measurements():
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_last_error_code",
+            friendly_name="Boiler Letzter Fehler",
+            domain="sensor",
+            data_kind="enum",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-03T09:51:54.981364Z", state="--(6256) 03.04.2026 11:50 - now"),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="boiler_current_flow_temperature",
+            friendly_name="Boiler Vorlauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-03T09:51:54.981715Z", value=52.1),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="boiler_return_temperature",
+            friendly_name="Boiler Ruecklauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-03T09:51:54.981526Z", value=45.2),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="mixer_hc2_setpoint_flow_temperature",
+            friendly_name="HK2 Soll Vorlauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-03T09:51:45.191748Z", value=29.0),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._build_facts(
+        "anomaly",
+        "lies die werte zum zeitpunkt des fehlers aus",
+        series,
+    )
+
+    facts_text = " ".join(facts)
+    assert "Fehlerzeitpunkt erkannt" in facts_text
+    assert "6256" in facts_text
+    assert "Boiler Vorlauf (boiler_current_flow_temperature) beim Fehlerzeitpunkt: 52.1" in facts_text
+    assert "Boiler Ruecklauf (boiler_return_temperature) beim Fehlerzeitpunkt: 45.2" in facts_text
+
+
+def test_fault_anchor_prefers_embedded_error_timestamp_over_point_ts():
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_last_error_code",
+            friendly_name="Boiler Letzter Fehler",
+            domain="sensor",
+            data_kind="enum",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-19T11:49:00Z", state="--(6256) 03.04.2026 11:50 - now"),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="boiler_current_flow_temperature",
+            friendly_name="Boiler Vorlauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-03T09:51:54.981715Z", value=52.1),
+                DataPoint(ts="2026-04-19T11:49:00Z", value=33.6),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._build_facts(
+        "anomaly",
+        "lies die werte zum zeitpunkt des fehlers aus",
+        series,
+    )
+
+    facts_text = " ".join(facts)
+    assert "2026-04-03 11:50 CEST" in facts_text
+    assert "Boiler Vorlauf (boiler_current_flow_temperature) beim Fehlerzeitpunkt: 52.1" in facts_text
 
 
 def test_extract_operating_phases_from_binary_data():
