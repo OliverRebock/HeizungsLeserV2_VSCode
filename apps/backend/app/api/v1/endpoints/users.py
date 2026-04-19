@@ -107,6 +107,25 @@ async def create_user(
         return created_user
     return _serialize_user_for_response(created_user, {user_in.tenant_id})
 
+@router.put("/me/change-password", response_model=bool)
+async def change_own_password(
+    *,
+    db: AsyncSession = Depends(get_db),
+    password_in: UserChangePassword,
+    current_user: UserModel = Depends(deps.get_current_user),
+):
+    """
+    Change own password. Requires providing current password for verification.
+    """
+    from app.core.security import verify_password
+    
+    # Verify current password
+    if not verify_password(password_in.old_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+    
+    # Update password
+    return await user_service.reset_password(db, user_id=current_user.id, new_password=password_in.new_password)
+
 @router.get("/{user_id}", response_model=User)
 async def read_user_by_id(
     user_id: int,
@@ -244,23 +263,3 @@ async def reset_user_password(
             raise HTTPException(status_code=403, detail="Tenant admins cannot reset passwords for users with memberships outside their own tenant")
 
     return await user_service.reset_password(db, user_id=user_id, new_password=password_in.new_password)
-
-
-@router.put("/me/change-password", response_model=bool)
-async def change_own_password(
-    *,
-    db: AsyncSession = Depends(get_db),
-    password_in: UserChangePassword,
-    current_user: UserModel = Depends(deps.get_current_user),
-):
-    """
-    Change own password. Requires providing current password for verification.
-    """
-    from app.core.security import verify_password
-    
-    # Verify current password
-    if not verify_password(password_in.old_password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect current password")
-    
-    # Update password
-    return await user_service.reset_password(db, user_id=current_user.id, new_password=password_in.new_password)
