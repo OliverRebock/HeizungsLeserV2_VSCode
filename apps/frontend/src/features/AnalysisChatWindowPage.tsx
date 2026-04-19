@@ -406,7 +406,7 @@ const AnalysisChatWindowPage: React.FC = () => {
                   <div className="max-w-[92%] rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50 to-slate-50 px-4 py-3 text-slate-800 shadow-sm">
                     <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-700">Bereit</p>
                     <p className="text-sm leading-relaxed text-slate-700">
-                      Chat startet leer. Stelle eine konkrete Frage wie z. B. "Taktet die Waermepumpe haeufig?" oder "Wie hoch ist der Durchfluss von PC0 und PC1?"
+                      Einfach losschießen: zum Beispiel mit Fragen wie „Taktet die Wärmepumpe auffällig oft?“, „Wie hoch ist der Durchfluss von PC0 und PC1?“ oder „Läuft die Anlage gerade fehlerfrei?“ — kurz gesagt: Frag, was immer du über die Anlage wissen willst.
                     </p>
                   </div>
                 </div>

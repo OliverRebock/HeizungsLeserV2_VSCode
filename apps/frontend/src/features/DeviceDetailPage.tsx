@@ -48,7 +48,6 @@ const DeviceDetailPage: React.FC = () => {
     loadDashboard();
   }, [deviceId]);
 
-  // Device Info
   const { data: device, isLoading: isDeviceLoading, error: deviceError } = useQuery({
     queryKey: ['device', deviceId],
     queryFn: async () => {
@@ -1030,7 +1029,7 @@ const DeviceDetailPage: React.FC = () => {
           { id: 'overview', label: 'Übersicht', icon: Activity },
           { id: 'dashboard', label: 'Dashboard', icon: Layout },
           { id: 'entities', label: 'Alle Entitäten', icon: List },
-          { id: 'charts', label: 'Verläufe', icon: BarChart3 },
+          { id: 'charts', label: 'Vergleiche', icon: BarChart3 },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -1363,7 +1362,7 @@ const DeviceDetailPage: React.FC = () => {
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                 <div>
-                  <h3 className="font-bold text-slate-900 text-lg">Vergleich & Verläufe</h3>
+                  <h3 className="font-bold text-slate-900 text-lg">Vergleiche</h3>
                   <p className="text-slate-500 text-sm">Visualisierung ausgewählter Messwerte</p>
                 </div>
                 
@@ -1510,7 +1509,7 @@ const DeviceDetailPage: React.FC = () => {
                   </div>
                   <h4 className="text-slate-900 text-xl font-bold mb-2">Vergleichsansicht vorbereiten</h4>
                   <p className="max-w-xs text-center text-slate-500 text-sm px-6 mb-8">
-                    Wählen Sie die Entitäten aus, deren Verläufe Sie vergleichen oder analysieren möchten.
+                    Wählen Sie die Entitäten aus, die Sie vergleichen oder analysieren möchten.
                   </p>
                   <button 
                     onClick={() => setActiveTab('entities')} 
