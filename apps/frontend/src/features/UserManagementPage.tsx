@@ -42,6 +42,41 @@ const UserManagementPage: React.FC = () => {
 
   const isAdmin = currentUser?.is_superuser;
 
+  const formatApiError = (error: any, fallback: string) => {
+    const detail = error?.response?.data?.detail;
+
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+
+    if (Array.isArray(detail) && detail.length > 0) {
+      return detail
+        .map((entry: any) => {
+          if (typeof entry?.msg === 'string' && entry.msg.trim()) {
+            return entry.msg;
+          }
+          if (typeof entry === 'string') {
+            return entry;
+          }
+          return JSON.stringify(entry);
+        })
+        .join(' | ');
+    }
+
+    if (detail && typeof detail === 'object') {
+      if (typeof detail.message === 'string' && detail.message.trim()) {
+        return detail.message;
+      }
+      return JSON.stringify(detail);
+    }
+
+    if (typeof error?.message === 'string' && error.message.trim()) {
+      return error.message;
+    }
+
+    return fallback;
+  };
+
   const { data: users, isLoading: isUsersLoading } = useQuery({
     queryKey: ['users', selectedTenant],
     queryFn: async () => {
@@ -73,7 +108,7 @@ const UserManagementPage: React.FC = () => {
     },
     onError: (error: any) => {
       console.error('Error creating user:', error);
-      alert('Fehler beim Anlegen des Benutzers: ' + (error.response?.data?.detail || error.message));
+      alert('Fehler beim Anlegen des Benutzers: ' + formatApiError(error, 'Unbekannter Fehler'));
     }
   });
 
@@ -88,7 +123,7 @@ const UserManagementPage: React.FC = () => {
     },
     onError: (error: any) => {
       console.error('Error updating user:', error);
-      alert('Fehler beim Aktualisieren des Benutzers: ' + (error.response?.data?.detail || error.message));
+      alert('Fehler beim Aktualisieren des Benutzers: ' + formatApiError(error, 'Unbekannter Fehler'));
     }
   });
 
@@ -106,6 +141,10 @@ const UserManagementPage: React.FC = () => {
       setIsResetModalOpen(false);
       setResetPassword('');
       alert('Passwort erfolgreich zurückgesetzt');
+    },
+    onError: (error: any) => {
+      console.error('Error resetting password:', error);
+      alert('Fehler beim Zurücksetzen des Passworts: ' + formatApiError(error, 'Unbekannter Fehler'));
     },
   });
 
@@ -146,7 +185,11 @@ const UserManagementPage: React.FC = () => {
       return;
     }
 
-    const payload = { ...formData, tenant_id: parseInt(formData.tenant_id) };
+    const payload: any = { ...formData };
+    payload.tenant_id = formData.tenant_id ? parseInt(formData.tenant_id, 10) : undefined;
+    if (payload.tenant_id === undefined) {
+      delete payload.tenant_id;
+    }
     // Remove confirm password from payload
     const { password_confirm, ...submitPayload } = payload;
     
