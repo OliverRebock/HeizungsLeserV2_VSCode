@@ -47,6 +47,15 @@ class UserPasswordReset(BaseModel):
     def validate_new_password(cls, value: str) -> str:
         return validate_password_strength(value)
 
+class UserChangePassword(BaseModel):
+    old_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
+
 class User(UserBase):
     id: int
     is_superuser: bool
