@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from app.schemas.analysis import ChatTurn
@@ -495,3 +497,46 @@ def test_extract_counter_differences_from_numeric_counters():
     assert len(facts) > 0
     facts_text = " ".join(facts).lower()
     assert any(word in facts_text for word in ["start", "anzahl", "häufig", "zahl", "delta"])
+
+
+def test_build_facts_includes_period_summary_for_generic_7d_question():
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_current_flow_temperature",
+            friendly_name="Boiler Vorlauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-12T08:00:00Z", value=28.0),
+                DataPoint(ts="2026-04-15T08:00:00Z", value=36.0),
+                DataPoint(ts="2026-04-19T08:00:00Z", value=33.1),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="boiler_return_temperature",
+            friendly_name="Boiler Ruecklauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-12T08:00:00Z", value=27.5),
+                DataPoint(ts="2026-04-15T08:00:00Z", value=34.5),
+                DataPoint(ts="2026-04-19T08:00:00Z", value=33.2),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._build_facts(
+        "general",
+        "was ist mit der heizung los?",
+        series,
+        start_dt=datetime(2026, 4, 12, 18, 45, tzinfo=timezone.utc),
+        end_dt=datetime(2026, 4, 19, 18, 45, tzinfo=timezone.utc),
+    )
+
+    assert any("im zeitraum" in fact.lower() for fact in facts)
+    assert any("aktuell:" in fact.lower() for fact in facts)

@@ -75,7 +75,7 @@ class HeatPumpChatService:
         raw = await influx_service.get_timeseries(device, selected_entities, start_iso, end_iso)
         series: List[TimeSeriesResponse] = raw.get("series", [])
 
-        facts = self._build_facts(intent, resolved_question, series)
+        facts = self._build_facts(intent, resolved_question, series, start_dt=start_dt, end_dt=end_dt)
         answer = await self._generate_answer(request, intent, facts, selected_entities, start_iso, end_iso, resolved_question)
 
         return HeatPumpChatResponse(
@@ -522,7 +522,14 @@ class HeatPumpChatService:
                 return str(round(float(point.value), 3))
         return None
 
-    def _build_facts(self, intent: str, question: str, series: List[TimeSeriesResponse]) -> List[str]:
+    def _build_facts(
+        self,
+        intent: str,
+        question: str,
+        series: List[TimeSeriesResponse],
+        start_dt: Optional[datetime] = None,
+        end_dt: Optional[datetime] = None,
+    ) -> List[str]:
         facts: List[str] = []
         if not series:
             return ["Keine passenden Messwerte im gewaehlten Zeitraum gefunden."]
@@ -533,6 +540,14 @@ class HeatPumpChatService:
         question_requests_error_window = self._question_requests_error_window_readout(q)
         question_asks_for_duration = any(token in q for token in ["wie lange", "dauer", "lang ist", "länge"])
         question_asks_for_count = any(token in q for token in ["wie viele", "wie oft", "anzahl", "zahl"])
+        include_period_summary = self._should_include_period_summary(
+            intent=intent,
+            question_is_time_focused=question_is_time_focused,
+            question_requests_error_window=question_requests_error_window,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            series=series,
+        )
         
         if question_requests_error_window:
             facts.extend(self._extract_fault_window_values(series)[:12])
@@ -547,6 +562,9 @@ class HeatPumpChatService:
         elif question_is_time_focused:
             # For time-focused non-DHW questions, show time series statistics instead of just current values
             facts.extend(self._extract_time_series_summary(series)[:12])
+        elif include_period_summary:
+            # For broad windows (e.g. 7D/30D), provide period stats even for generic questions.
+            facts.extend(self._extract_time_series_summary(series)[:10])
 
         # Always add current values as context
         for s in series:
@@ -563,6 +581,34 @@ class HeatPumpChatService:
             facts.extend(transitions[:5])
 
         return facts[:24]
+
+    def _should_include_period_summary(
+        self,
+        intent: str,
+        question_is_time_focused: bool,
+        question_requests_error_window: bool,
+        start_dt: Optional[datetime],
+        end_dt: Optional[datetime],
+        series: List[TimeSeriesResponse],
+    ) -> bool:
+        if question_is_time_focused or question_requests_error_window:
+            return False
+
+        if start_dt is None or end_dt is None or end_dt <= start_dt:
+            return False
+
+        # 6h+ indicates the user likely wants trend context, not only latest values.
+        window_hours = (end_dt - start_dt).total_seconds() / 3600
+        if window_hours < 6:
+            return False
+
+        if intent not in {"general", "health", "anomaly", "flow", "cycling", "hot_water"}:
+            return False
+
+        return any(
+            len(s.points) >= 2 and any(point.value is not None for point in s.points)
+            for s in series
+        )
 
     def _extract_time_series_summary(self, series: List[TimeSeriesResponse]) -> List[str]:
         """Extract min/max/average statistics for time-focused questions."""
