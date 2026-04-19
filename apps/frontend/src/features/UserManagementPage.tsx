@@ -17,10 +17,18 @@ import {
 } from 'lucide-react';
 
 const UserManagementPage: React.FC = () => {
+  type Notice = {
+    type: 'success' | 'error';
+    text: string;
+  };
+
   const { user: currentUser } = useAuthStore();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTenant, setSelectedTenant] = useState<string>('');
+  const [pageNotice, setPageNotice] = useState<Notice | null>(null);
+  const [editNotice, setEditNotice] = useState<Notice | null>(null);
+  const [resetNotice, setResetNotice] = useState<Notice | null>(null);
   
   // Modal states
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -42,15 +50,31 @@ const UserManagementPage: React.FC = () => {
 
   const isAdmin = currentUser?.is_superuser;
 
+  const localizeErrorMessage = (message: string) => {
+    return message
+      .replace(/^Value error,\s*/i, '')
+      .replace('Password must be at least', 'Passwort muss mindestens')
+      .replace('characters long', 'Zeichen lang sein')
+      .replace('Password must not start or end with whitespace', 'Passwort darf nicht mit Leerzeichen beginnen oder enden')
+      .replace('Password must not contain whitespace', 'Passwort darf keine Leerzeichen enthalten')
+      .replace('Password must contain at least one uppercase letter', 'Passwort muss mindestens einen Grossbuchstaben enthalten')
+      .replace('Password must contain at least one lowercase letter', 'Passwort muss mindestens einen Kleinbuchstaben enthalten')
+      .replace('Password must contain at least one digit', 'Passwort muss mindestens eine Zahl enthalten')
+      .replace('Password must contain at least one special character', 'Passwort muss mindestens ein Sonderzeichen enthalten')
+      .replace('Incorrect current password', 'Das aktuelle Passwort ist falsch')
+      .replace('Incorrect email or password', 'E-Mail oder Passwort ist falsch')
+      .replace('User not found', 'Benutzer wurde nicht gefunden');
+  };
+
   const formatApiError = (error: any, fallback: string) => {
     const detail = error?.response?.data?.detail;
 
     if (typeof detail === 'string' && detail.trim()) {
-      return detail;
+      return localizeErrorMessage(detail);
     }
 
     if (Array.isArray(detail) && detail.length > 0) {
-      return detail
+      return localizeErrorMessage(detail
         .map((entry: any) => {
           if (typeof entry?.msg === 'string' && entry.msg.trim()) {
             return entry.msg;
@@ -60,24 +84,24 @@ const UserManagementPage: React.FC = () => {
           }
           return JSON.stringify(entry);
         })
-        .join(' | ');
+        .join(' | '));
     }
 
     if (detail && typeof detail === 'object') {
       if (typeof detail.message === 'string' && detail.message.trim()) {
-        return detail.message;
+        return localizeErrorMessage(detail.message);
       }
-      return JSON.stringify(detail);
+      return localizeErrorMessage(JSON.stringify(detail));
     }
 
     if (typeof error?.message === 'string' && error.message.trim()) {
-      return error.message;
+      return localizeErrorMessage(error.message);
     }
 
-    return fallback;
+    return localizeErrorMessage(fallback);
   };
 
-  const { data: users, isLoading: isUsersLoading } = useQuery({
+  const { data: users, isLoading: isUsersLoading, error: usersError } = useQuery({
     queryKey: ['users', selectedTenant],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -103,12 +127,13 @@ const UserManagementPage: React.FC = () => {
       console.log('User created successfully');
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setIsEditModalOpen(false);
+      setEditNotice(null);
       resetForm();
-      alert('Benutzer erfolgreich angelegt');
+      setPageNotice({ type: 'success', text: 'Benutzer wurde erfolgreich angelegt.' });
     },
     onError: (error: any) => {
       console.error('Error creating user:', error);
-      alert('Fehler beim Anlegen des Benutzers: ' + formatApiError(error, 'Unbekannter Fehler'));
+      setEditNotice({ type: 'error', text: 'Fehler beim Anlegen des Benutzers: ' + formatApiError(error, 'Unbekannter Fehler') });
     }
   });
 
@@ -118,12 +143,13 @@ const UserManagementPage: React.FC = () => {
       console.log('User updated successfully');
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setIsEditModalOpen(false);
+      setEditNotice(null);
       resetForm();
-      alert('Benutzer erfolgreich aktualisiert');
+      setPageNotice({ type: 'success', text: 'Benutzer wurde erfolgreich aktualisiert.' });
     },
     onError: (error: any) => {
       console.error('Error updating user:', error);
-      alert('Fehler beim Aktualisieren des Benutzers: ' + formatApiError(error, 'Unbekannter Fehler'));
+      setEditNotice({ type: 'error', text: 'Fehler beim Aktualisieren des Benutzers: ' + formatApiError(error, 'Unbekannter Fehler') });
     }
   });
 
@@ -140,11 +166,12 @@ const UserManagementPage: React.FC = () => {
     onSuccess: () => {
       setIsResetModalOpen(false);
       setResetPassword('');
-      alert('Passwort erfolgreich zurückgesetzt');
+      setResetNotice(null);
+      setPageNotice({ type: 'success', text: 'Passwort wurde erfolgreich zurueckgesetzt.' });
     },
     onError: (error: any) => {
       console.error('Error resetting password:', error);
-      alert('Fehler beim Zurücksetzen des Passworts: ' + formatApiError(error, 'Unbekannter Fehler'));
+      setResetNotice({ type: 'error', text: 'Fehler beim Zuruecksetzen des Passworts: ' + formatApiError(error, 'Unbekannter Fehler') });
     },
   });
 
@@ -160,6 +187,7 @@ const UserManagementPage: React.FC = () => {
       is_active: true
     });
     setEditingUser(null);
+    setEditNotice(null);
   };
 
   const handleEdit = (user: User) => {
@@ -175,13 +203,14 @@ const UserManagementPage: React.FC = () => {
       is_active: user.is_active ?? true
     });
     setIsEditModalOpen(true);
+    setEditNotice(null);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
     if (formData.password !== formData.password_confirm) {
-      alert('Passwörter stimmen nicht überein!');
+      setEditNotice({ type: 'error', text: 'Passwoerter stimmen nicht ueberein.' });
       return;
     }
 
@@ -209,7 +238,7 @@ const UserManagementPage: React.FC = () => {
     }
   };
 
-  const filteredUsers = users?.filter(u => {
+  const filteredUsers = (users ?? []).filter(u => {
     if (!isAdmin) {
       // Rule: tenant_admin can only see tenant_users (or themselves)
       const targetIsSelf = u.id === currentUser?.id;
@@ -250,6 +279,30 @@ const UserManagementPage: React.FC = () => {
         </button>
       </div>
 
+      {pageNotice && (
+        <div
+          className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${
+            pageNotice.type === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+              : 'border-rose-200 bg-rose-50 text-rose-900'
+          }`}
+        >
+          {pageNotice.type === 'success' ? (
+            <CheckCircle className="mt-0.5 h-5 w-5 shrink-0" />
+          ) : (
+            <XCircle className="mt-0.5 h-5 w-5 shrink-0" />
+          )}
+          <div className="flex-1 text-sm font-medium">{pageNotice.text}</div>
+          <button
+            onClick={() => setPageNotice(null)}
+            className="text-current/70 hover:text-current"
+            aria-label="Hinweis schliessen"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4">
         <div className="relative flex-1">
@@ -282,6 +335,12 @@ const UserManagementPage: React.FC = () => {
           <div className="p-12 flex flex-col items-center justify-center text-slate-400">
             <Loader2 className="w-8 h-8 animate-spin mb-2" />
             <p>Benutzer werden geladen...</p>
+          </div>
+        ) : usersError ? (
+          <div className="p-6">
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+              Fehler beim Laden der Benutzer: {formatApiError(usersError, 'Unbekannter Fehler')}
+            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -390,6 +449,30 @@ const UserManagementPage: React.FC = () => {
               </button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              {editNotice && (
+                <div
+                  className={`flex items-start gap-3 rounded-lg border px-3 py-2 text-sm ${
+                    editNotice.type === 'success'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  {editNotice.type === 'success' ? (
+                    <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  ) : (
+                    <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  )}
+                  <div className="flex-1">{editNotice.text}</div>
+                  <button
+                    type="button"
+                    onClick={() => setEditNotice(null)}
+                    className="text-current/70 hover:text-current"
+                    aria-label="Hinweis schliessen"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="block text-sm font-bold text-slate-700 mb-1">Anzeigename</label>
@@ -506,6 +589,30 @@ const UserManagementPage: React.FC = () => {
               <h3 className="text-xl font-bold text-slate-900">Passwort zurücksetzen</h3>
               <p className="text-sm text-slate-500">Geben Sie ein neues Passwort für <b>{editingUser?.email}</b> ein.</p>
             </div>
+            {resetNotice && (
+              <div
+                className={`flex items-start gap-3 rounded-lg border px-3 py-2 text-sm ${
+                  resetNotice.type === 'success'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                    : 'border-rose-200 bg-rose-50 text-rose-900'
+                }`}
+              >
+                {resetNotice.type === 'success' ? (
+                  <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                ) : (
+                  <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                )}
+                <div className="flex-1">{resetNotice.text}</div>
+                <button
+                  type="button"
+                  onClick={() => setResetNotice(null)}
+                  className="text-current/70 hover:text-current"
+                  aria-label="Hinweis schliessen"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
             <div className="space-y-4">
               <input 
                 type="password" 
