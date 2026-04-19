@@ -17,6 +17,31 @@ class AnalysisRequest(BaseModel):
     class Config:
         populate_by_name = True
 
+
+class ChatTurn(BaseModel):
+    role: str  # user | assistant
+    content: str
+
+
+class HeatPumpChatRequest(BaseModel):
+    question: str
+    start: Optional[datetime] = Field(None, alias="from")
+    end: Optional[datetime] = Field(None, alias="to")
+    language: str = "de"
+    history: List[ChatTurn] = Field(default_factory=list)
+
+    class Config:
+        populate_by_name = True
+
+
+class HeatPumpChatResponse(BaseModel):
+    intent: str
+    answer: str
+    used_entity_ids: List[str] = Field(default_factory=list)
+    evidence: List[str] = Field(default_factory=list)
+    timeframe: Dict[str, str]
+    disclaimer: str = "Die Antwort ist eine datenbasierte KI-Einschaetzung und ersetzt keine fachliche Vor-Ort-Pruefung."
+
 class Finding(BaseModel):
     title: str
     severity: str  # low, medium, high, critical

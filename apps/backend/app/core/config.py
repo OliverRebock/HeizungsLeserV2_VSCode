@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     OPENAI_MODEL_PRIMARY: str = "gpt-5.3"
     OPENAI_TIMEOUT_SECONDS: int = 60
     OPENAI_ANALYSIS_ENABLED: bool = False
+    CHAT_DISPLAY_TIMEZONE: str = "Europe/Berlin"
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILES,

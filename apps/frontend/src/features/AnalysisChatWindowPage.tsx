@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import axios from 'axios';
-import { Mic, Square, SendHorizontal, MessageSquareText, Loader2, AlertCircle, Activity, X } from 'lucide-react';
+import { Mic, Square, SendHorizontal, MessageSquareText, Loader2, AlertCircle, Activity, X, ChevronDown } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
-import type { AnalysisResponse, Device } from '../types/api';
+import type { Device, HeatPumpChatResponse } from '../types/api';
 
 type SpeechRecognitionAlternativeLike = {
   transcript: string;
@@ -51,15 +51,6 @@ declare global {
     webkitSpeechRecognition?: SpeechRecognitionConstructor;
   }
 }
-
-const ISSUE_OPTIONS = [
-  { value: 'quick-check', focus: 'Schneller Vor-Ort-Check mit Fokus auf die wichtigste Spur und die naechsten Pruefschritte.' },
-  { value: 'error-code', focus: 'Aktuelle Stoerung oder Fehlercode schnell einordnen und die wahrscheinlichste Ursache priorisieren.' },
-  { value: 'no-heat', focus: 'Pruefen, warum die Anlage aktuell keine oder zu wenig Heizleistung liefert.' },
-  { value: 'cycling', focus: 'Auffaellige Taktung bewerten und die wahrscheinlichste technische Ursache benennen.' },
-  { value: 'hot-water', focus: 'Warmwasserproblem schnell einordnen und die wichtigsten Pruefpunkte nennen.' },
-  { value: 'temperatures', focus: 'Unplausible Temperaturen, Fuehlerwerte oder Spreizungen gezielt bewerten.' },
-] as const;
 
 const getApiErrorMessage = (error: unknown, fallback: string) => {
   if (axios.isAxiosError(error)) {
@@ -113,57 +104,6 @@ const getRangeStartDate = (selectedRange: string) => {
   return fromDate;
 };
 
-const buildChatAnalysisFocus = (
-  selectedIssue: string,
-  problemNote: string,
-  chatMessages: ChatMessage[],
-  latestMessage: string,
-  baseAnalysis?: AnalysisResponse | null,
-) => {
-  const selectedOption = ISSUE_OPTIONS.find((option) => option.value === selectedIssue) ?? ISSUE_OPTIONS[0];
-  const recentMessages = chatMessages
-    .slice(-6)
-    .map((message) => `${message.role === 'user' ? 'Monteur' : 'Assistent'}: ${message.content}`)
-    .join(' | ');
-
-  return [
-    `Chat-Modus fuer Heizungsbauer zum Einsatzfall: ${selectedOption.value}.`,
-    'Antworte wie ein technischer Assistent im Vor-Ort-Einsatz.',
-    'Nutze alle verfuegbaren Messdaten im gewaehlten Zeitraum fuer die Antwort.',
-    'Erst kurz den Zustand einordnen, dann maximal 3 konkrete Schritte nennen.',
-    'Verwende klare Monteur-Sprache, keine Management-Formulierungen.',
-    problemNote.trim() ? `Vor-Ort-Notiz: ${problemNote.trim()}.` : null,
-    baseAnalysis?.summary ? `Bisherige Haupteinschaetzung: ${baseAnalysis.summary}.` : null,
-    recentMessages ? `Bisheriger Chatverlauf: ${recentMessages}.` : null,
-    `Neue Frage vom Monteur: ${latestMessage.trim()}.`,
-  ]
-    .filter(Boolean)
-    .join(' ');
-};
-
-const buildAssistantChatMessage = (analysis: AnalysisResponse) => {
-  const parts: string[] = [analysis.summary];
-
-  if (analysis.detected_error_codes.length > 0) {
-    const firstCode = analysis.detected_error_codes[0];
-    parts.push(`Fehlercode im Fokus: ${firstCode.code} ${firstCode.label}.`);
-  }
-
-  if (analysis.findings[0]) {
-    parts.push(`Wichtigster Befund: ${analysis.findings[0].title}. ${analysis.findings[0].description}`);
-  }
-
-  if (analysis.recommended_followup_checks.length > 0) {
-    const steps = analysis.recommended_followup_checks.slice(0, 3);
-    parts.push(`Naechste Schritte: ${steps.map((step, index) => `${index + 1}. ${step}`).join(' ')}`);
-  } else if (analysis.optimization_hints.length > 0) {
-    const steps = analysis.optimization_hints.slice(0, 2);
-    parts.push(`Pruefhinweise: ${steps.join(' ')}`);
-  }
-
-  return parts.join('\n\n');
-};
-
 const createChatMessage = (
   role: ChatMessage['role'],
   content: string,
@@ -195,7 +135,9 @@ const getSpeechRecognitionErrorMessage = (error: string) => {
 const AnalysisChatWindowPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const initialRequestStartedRef = useRef(false);
+  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const chatBottomAnchorRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollEnabledRef = useRef(true);
   const chatDraftRef = useRef('');
   const shouldAutoSendChatRef = useRef(false);
 
@@ -203,18 +145,13 @@ const AnalysisChatWindowPage: React.FC = () => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState('');
-  const [baseAnalysis, setBaseAnalysis] = useState<AnalysisResponse | null>(null);
-  const [selectedIssue, setSelectedIssue] = useState<string | null>(null);
-  const [chatStarted, setChatStarted] = useState(false);
-  const [heatingDataLoaded, setHeatingDataLoaded] = useState(false);
-  const [isLoadingHeatingData, setIsLoadingHeatingData] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const selectedRange = (searchParams.get('range') === '24h' || searchParams.get('range') === '7d' || searchParams.get('range') === '30d')
     ? (searchParams.get('range') as '24h' | '7d' | '30d')
     : '24h';
 
   const parsedDeviceId = Number(searchParams.get('deviceId') ?? '0');
   const selectedDeviceId = Number.isFinite(parsedDeviceId) && parsedDeviceId > 0 ? parsedDeviceId : null;
-  const problemNote = searchParams.get('note') ?? '';
 
   const speechRecognitionApi = typeof window !== 'undefined'
     ? window.SpeechRecognition ?? window.webkitSpeechRecognition
@@ -244,98 +181,32 @@ const AnalysisChatWindowPage: React.FC = () => {
     chatDraftRef.current = chatInput;
   }, [chatInput]);
 
-  useEffect(() => {
-    if (!selectedDeviceId || initialRequestStartedRef.current) {
+  const scrollChatToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    const anchor = chatBottomAnchorRef.current;
+    if (anchor) {
+      anchor.scrollIntoView({ behavior, block: 'end' });
       return;
     }
 
-    initialRequestStartedRef.current = true;
-    setHeatingDataLoaded(false);
-    setIsLoadingHeatingData(true);
-    setChatMessages([]);
-    setSelectedIssue(null);
-    setChatStarted(false);
+    const container = chatScrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTo({ top: container.scrollHeight, behavior });
+  };
 
-    const loadData = async () => {
-      const fromDate = getRangeStartDate(selectedRange);
+  const handleChatScroll = () => {
+    const container = chatScrollContainerRef.current;
+    if (!container) {
+      return;
+    }
 
-      try {
-        const response = await api.post<AnalysisResponse>(`/analysis/${selectedDeviceId}`, {
-          from: fromDate.toISOString(),
-          to: new Date().toISOString(),
-          analysis_focus: 'Daten laden ohne Analyse.',
-          language: 'de',
-        });
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const nearBottom = distanceToBottom <= 80;
 
-        setBaseAnalysis(response.data);
-        setHeatingDataLoaded(true);
-      } catch (error) {
-        setChatMessages([
-          createChatMessage('assistant', getApiErrorMessage(error, 'Heizungsdaten konnten nicht geladen werden.'), 'Fehler'),
-        ]);
-      } finally {
-        setIsLoadingHeatingData(false);
-      }
-    };
-
-    loadData();
-  }, [selectedDeviceId, selectedRange]);
-
-  const startChatWithIssueMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedDeviceId || !selectedIssue || !baseAnalysis) {
-        return null;
-      }
-
-      const fromDate = getRangeStartDate(selectedRange);
-      const selectedOption = ISSUE_OPTIONS.find((option) => option.value === selectedIssue) ?? ISSUE_OPTIONS[0];
-      
-      const focus = [
-        selectedOption.focus,
-        'Die Antwort ist für einen Heizungsbauer direkt beim Kunden gedacht.',
-        'Antworte kurz, direkt und praxisnah.',
-        'Nenne zuerst die wahrscheinlichste Ursache und danach maximal 3 konkrete Prüfschritte vor Ort.',
-        'Vermeide lange Erklärtexte und zu viele Detailanalysen.',
-        problemNote.trim() ? `Hinweis vom Einsatz vor Ort: ${problemNote.trim()}` : null,
-      ]
-        .filter(Boolean)
-        .join(' ');
-
-      const response = await api.post<AnalysisResponse>(`/analysis/${selectedDeviceId}`, {
-        from: fromDate.toISOString(),
-        to: new Date().toISOString(),
-        analysis_focus: focus,
-        language: 'de',
-      });
-
-      return response.data;
-    },
-    onSuccess: (data) => {
-      if (!data) {
-        return;
-      }
-
-      setBaseAnalysis(data);
-      setChatStarted(true);
-      setChatMessages([
-        createChatMessage(
-          'assistant',
-          buildAssistantChatMessage(data),
-          'Erstantwort zum ausgewählten Problem',
-        ),
-      ]);
-    },
-    onError: (error) => {
-      setChatMessages([
-        createChatMessage('assistant', getApiErrorMessage(error, 'Der Schnellcheck konnte nicht geladen werden.'), 'Fehler'),
-      ]);
-    },
-  });
-
-  const handleSelectIssue = (issue: string) => {
-    setSelectedIssue(issue);
-    startChatWithIssueMutation.mutate();
-  }
+    autoScrollEnabledRef.current = nearBottom;
+    setShowScrollToBottom(!nearBottom);
+  };
 
   const chatMutation = useMutation({
     mutationFn: async (message: string) => {
@@ -344,11 +215,12 @@ const AnalysisChatWindowPage: React.FC = () => {
       }
 
       const fromDate = getRangeStartDate(selectedRange);
-      const response = await api.post<AnalysisResponse>(`/analysis/${selectedDeviceId}`, {
+      const response = await api.post<HeatPumpChatResponse>(`/analysis/${selectedDeviceId}/chat`, {
+        question: message,
         from: fromDate.toISOString(),
         to: new Date().toISOString(),
-        analysis_focus: buildChatAnalysisFocus(selectedIssue ?? 'quick-check', problemNote, chatMessages, message, baseAnalysis),
         language: 'de',
+        history: chatMessages.map((item) => ({ role: item.role, content: item.content })),
       });
 
       return response.data;
@@ -358,11 +230,20 @@ const AnalysisChatWindowPage: React.FC = () => {
         return;
       }
 
-      setBaseAnalysis(data);
-      setChatStarted(true);
+      const evidence = data.evidence?.slice(0, 3) ?? [];
+      const appendix = evidence.length > 0
+        ? `\n\nMessgrundlage:\n- ${evidence.join('\n- ')}`
+        : '';
+
+      const tf = data.timeframe;
+      const periodLabel = tf.from_local && tf.to_local
+        ? `${tf.from_local} – ${tf.to_local}`
+        : `${tf.from} – ${tf.to}`;
+      const metaLabel = `Intent: ${data.intent} | Zeitraum: ${periodLabel}`;
+
       setChatMessages((current) => [
         ...current,
-        createChatMessage('assistant', buildAssistantChatMessage(data), 'Antwort aus dem Einsatz-Chat'),
+        createChatMessage('assistant', `${data.answer}${appendix}`, metaLabel),
       ]);
       setSpeechError('');
     },
@@ -373,6 +254,14 @@ const AnalysisChatWindowPage: React.FC = () => {
       ]);
     },
   });
+
+  useEffect(() => {
+    if (!autoScrollEnabledRef.current) {
+      return;
+    }
+
+    scrollChatToBottom('smooth');
+  }, [chatMessages, chatMutation.isPending]);
 
   const handleSendChatMessage = (messageOverride?: string) => {
     const trimmedMessage = (messageOverride ?? chatDraftRef.current).trim();
@@ -385,6 +274,9 @@ const AnalysisChatWindowPage: React.FC = () => {
       ...current,
       createChatMessage('user', trimmedMessage, 'Frage vom Monteur'),
     ]);
+    autoScrollEnabledRef.current = true;
+    setShowScrollToBottom(false);
+    requestAnimationFrame(() => scrollChatToBottom('smooth'));
     setChatInput('');
     chatDraftRef.current = '';
     chatMutation.mutate(trimmedMessage);
@@ -460,71 +352,62 @@ const AnalysisChatWindowPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-100 via-slate-50 to-white p-4 md:p-8">
-      <div className="mx-auto max-w-5xl space-y-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_12%_12%,#dbeafe_0%,transparent_38%),radial-gradient(circle_at_88%_82%,#fde68a_0%,transparent_35%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_42%,#f8fafc_100%)] px-3 pb-[calc(env(safe-area-inset-bottom)+14px)] pt-4 md:p-8">
+      <button
+        type="button"
+        onClick={() => window.close()}
+        className="fixed right-14 top-[calc(env(safe-area-inset-top)+10px)] z-50 inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-slate-600 shadow-[0_6px_20px_rgba(15,23,42,0.16)] backdrop-blur transition hover:bg-slate-50 sm:right-4 md:right-6 md:top-6"
+        title="Fenster schliessen"
+        aria-label="Fenster schliessen"
+      >
+        <X className="h-4 w-4" />
+      </button>
+      <div className="mx-auto max-w-5xl space-y-3 md:space-y-4">
+        <div className="rounded-[22px] border border-slate-200/80 bg-white/90 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur md:p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-slate-900 p-2.5 text-white">
+              <div className="rounded-xl bg-gradient-to-br from-slate-900 to-blue-700 p-2.5 text-white shadow-sm">
                 <MessageSquareText className="h-5 w-5" />
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-900">Einsatz-Chat</h1>
-                <p className="text-sm text-slate-500">Folgefragen per Text oder Mikrofon stellen, Antwort kommt in kurzer Monteur-Sprache.</p>
+                <h1 className="text-lg font-bold tracking-tight text-slate-900">Einsatz-Chat</h1>
+                <p className="text-sm text-slate-600">Folgefragen per Text oder Mikrofon. Antwort kommt in kurzer Monteur-Sprache.</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold text-slate-600">
+              <div className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700">
                 Live-Transkript + KI-Antwort
               </div>
-              <button
-                type="button"
-                onClick={() => window.close()}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"
-                title="Fenster schliessen"
-                aria-label="Fenster schliessen"
-              >
-                <X className="h-4 w-4" />
-              </button>
             </div>
           </div>
 
-          <div className="mt-4 space-y-3">
+          <div className="mt-3 space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1">
+              <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100/80 px-2.5 py-1 text-slate-700">
                 <Activity className="h-3.5 w-3.5" />
                 {selectedDevice?.display_name ?? `Geraet ${selectedDeviceId}`}
               </span>
-              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 uppercase">
+              <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 font-semibold uppercase tracking-wide text-indigo-700">
                 Zeitraum: {selectedRange}
               </span>
             </div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="p-5 md:p-6 space-y-4">
-            <div className="max-h-[56vh] overflow-y-auto space-y-3 pr-1">
-              {isLoadingHeatingData && !heatingDataLoaded && (
+        <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white/95 shadow-[0_14px_40px_rgba(30,41,59,0.1)] backdrop-blur">
+          <div className="space-y-3 p-4 md:space-y-4 md:p-6">
+            <div
+              ref={chatScrollContainerRef}
+              onScroll={handleChatScroll}
+              className="max-h-[50vh] space-y-3 overflow-y-auto pr-1 md:max-h-[56vh]"
+            >
+              {chatMessages.length === 0 && !chatMutation.isPending && (
                 <div className="flex justify-start">
-                  <div className="max-w-[90%] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-800 shadow-sm">
-                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Daten werden geladen</p>
-                    <div className="flex items-center gap-2 text-sm text-slate-500">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Heizungsdaten werden geladen...
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {startChatWithIssueMutation.isPending && chatMessages.length === 0 && (
-                <div className="flex justify-start">
-                  <div className="max-w-[90%] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-800 shadow-sm">
-                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Analyse laeuft</p>
-                    <div className="flex items-center gap-2 text-sm text-slate-500">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Erstantwort wird erstellt...
-                    </div>
+                  <div className="max-w-[92%] rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50 to-slate-50 px-4 py-3 text-slate-800 shadow-sm">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-700">Bereit</p>
+                    <p className="text-sm leading-relaxed text-slate-700">
+                      Chat startet leer. Stelle eine konkrete Frage wie z. B. "Taktet die Waermepumpe haeufig?" oder "Wie hoch ist der Durchfluss von PC0 und PC1?"
+                    </p>
                   </div>
                 </div>
               )}
@@ -537,8 +420,8 @@ const AnalysisChatWindowPage: React.FC = () => {
                   <div
                     className={`max-w-[92%] rounded-2xl border px-4 py-3 shadow-sm ${
                       message.role === 'user'
-                        ? 'border-blue-600 bg-blue-600 text-white'
-                        : 'border-slate-200 bg-slate-50 text-slate-800'
+                        ? 'border-blue-500 bg-gradient-to-br from-blue-600 to-indigo-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-800'
                     }`}
                   >
                     {message.meta && (
@@ -560,7 +443,7 @@ const AnalysisChatWindowPage: React.FC = () => {
 
               {chatMutation.isPending && (
                 <div className="flex justify-start">
-                  <div className="max-w-[90%] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-800 shadow-sm">
+                  <div className="max-w-[90%] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-800 shadow-sm">
                     <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Assistent denkt</p>
                     <div className="flex items-center gap-2 text-sm text-slate-500">
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -569,9 +452,29 @@ const AnalysisChatWindowPage: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              <div ref={chatBottomAnchorRef} aria-hidden="true" />
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+            {showScrollToBottom && (
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    autoScrollEnabledRef.current = true;
+                    setShowScrollToBottom(false);
+                    scrollChatToBottom('smooth');
+                  }}
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white/95 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Neueste Nachricht
+                </button>
+              </div>
+            )}
+
+            <div className="sticky bottom-0 -mx-4 border-t border-slate-200 bg-white/95 p-3 backdrop-blur md:-mx-6 md:p-4">
+              <div className="rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-3 shadow-sm">
               <textarea
                 rows={3}
                 value={chatInput}
@@ -582,15 +485,13 @@ const AnalysisChatWindowPage: React.FC = () => {
                     handleSendChatMessage();
                   }
                 }}
-                placeholder="Frage an die KI, z. B. 'Ist der Fehler eher hydraulisch oder elektrisch?'"
-                className="w-full rounded-xl border border-white bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                placeholder="Frage zur Waermepumpe, z. B. 'Laeuft die Anlage aktuell normal?'"
+                className="w-full rounded-xl border border-slate-100 bg-white px-4 py-3 text-sm text-slate-700 shadow-[inset_0_1px_2px_rgba(15,23,42,0.06)] outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
 
-              {!chatStarted && heatingDataLoaded && (
-                <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-                  Das Chatfenster ist bereit. Du kannst sofort per Text oder Sprache starten. Die Problemwahl unten ist optional und schärft nur den Fokus.
-                </p>
-              )}
+              <p className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-700">
+                Es werden nur relevante Influx-Daten zur Frage geladen, keine Vollabfrage beim Start.
+              </p>
 
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="text-[11px] text-slate-500">
@@ -616,7 +517,7 @@ const AnalysisChatWindowPage: React.FC = () => {
                     disabled={!speechSupported && !isListening}
                     title={isListening ? 'Spracheingabe laeuft' : 'Zum Sprechen gedrueckt halten'}
                     aria-label={isListening ? 'Spracheingabe laeuft' : 'Zum Sprechen gedrueckt halten'}
-                    className={`inline-flex h-11 w-11 select-none touch-none items-center justify-center rounded-full border transition ${
+                    className={`inline-flex h-11 w-11 select-none touch-none items-center justify-center rounded-full border shadow-sm transition ${
                       isListening
                         ? 'scale-95 border-red-200 bg-red-50 text-red-700 shadow-inner'
                         : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50'
@@ -629,7 +530,7 @@ const AnalysisChatWindowPage: React.FC = () => {
                     type="button"
                     onClick={() => handleSendChatMessage()}
                     disabled={!chatInput.trim() || chatMutation.isPending}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(37,99,235,0.28)] transition hover:from-blue-700 hover:to-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <SendHorizontal className="h-3.5 w-3.5" />
                     Senden
@@ -638,42 +539,18 @@ const AnalysisChatWindowPage: React.FC = () => {
               </div>
 
               {!speechSupported && (
-                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
                   Spracheingabe ist nur in Browsern mit Web-Speech-Unterstuetzung verfuegbar, typischerweise Chrome oder Edge.
                 </p>
               )}
 
                 {speechError && (
-                  <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
                     {speechError}
                   </p>
                 )}
               </div>
-
-              {!chatStarted && heatingDataLoaded && (
-                <div className="space-y-4">
-                  <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">
-                    <p className="text-sm font-semibold text-blue-900 mb-4">Welches Problem möchtest du analysieren?</p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {ISSUE_OPTIONS.map((issue) => (
-                        <button
-                          key={issue.value}
-                          onClick={() => handleSelectIssue(issue.value)}
-                          disabled={startChatWithIssueMutation.isPending}
-                          className="w-full rounded-lg border border-blue-300 bg-white px-4 py-3 text-left text-sm font-medium text-blue-900 hover:bg-blue-100 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {issue.value === 'quick-check' && 'Allgemeiner Schnellcheck'}
-                          {issue.value === 'error-code' && 'Fehlercode / Störung'}
-                          {issue.value === 'no-heat' && 'Keine Heizleistung'}
-                          {issue.value === 'cycling' && 'Viele Starts / Taktung'}
-                          {issue.value === 'hot-water' && 'Warmwasserproblem'}
-                          {issue.value === 'temperatures' && 'Temperaturproblem'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+            </div>
           </div>
         </div>
       </div>

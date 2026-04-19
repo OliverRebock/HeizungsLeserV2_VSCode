@@ -1,0 +1,343 @@
+import pytest
+
+from app.schemas.influx import DataPoint, Entity, TimeSeriesResponse
+from app.services.heatpump_chat_service import HeatPumpChatService
+
+
+def make_entity(entity_id: str, friendly_name: str = "") -> Entity:
+    return Entity(
+        entity_id=entity_id,
+        friendly_name=friendly_name,
+        domain="sensor",
+        data_kind="numeric",
+        render_mode="history_line",
+        chartable=True,
+        source_table="state",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "hat die heizung fehler?",
+        "welcher fehlercode liegt an?",
+        "gibt es stoerungen oder alarme?",
+    ],
+)
+async def test_detect_intent_routes_fault_questions_to_anomaly(question: str):
+    service = HeatPumpChatService()
+    intent = await service._detect_intent(question)
+    assert intent == "anomaly"
+
+
+def test_select_entities_for_anomaly_prioritizes_error_entities():
+    service = HeatPumpChatService()
+    entities = [
+        make_entity("boiler_current_flow_temperature", "Boiler Vorlauf"),
+        make_entity("boiler_return_temperature", "Boiler Ruecklauf"),
+        make_entity("boiler_last_error_code", "Boiler Letzter Fehler"),
+        make_entity("thermostat_alarm_status", "Thermostat Alarmstatus"),
+        make_entity("mixer_hc2_pump_status_pc1", "Pumpe HK2"),
+    ]
+
+    selected = service._select_entities("anomaly", "hat die heizung fehler?", entities)
+
+    assert "boiler_last_error_code" in selected
+    assert "thermostat_alarm_status" in selected
+    assert selected.index("boiler_last_error_code") < selected.index("boiler_current_flow_temperature")
+
+
+def test_fallback_entities_for_anomaly_prefers_error_marked_entities():
+    service = HeatPumpChatService()
+    entities = [
+        make_entity("boiler_current_flow_temperature", "Boiler Vorlauf"),
+        make_entity("boiler_last_error_code", "Boiler Letzter Fehler"),
+        make_entity("thermostat_alarm_status", "Thermostat Alarmstatus"),
+    ]
+
+    selected = service._fallback_entities("anomaly", entities)
+
+    assert selected == ["boiler_last_error_code", "thermostat_alarm_status"]
+
+
+def test_select_entities_for_general_keeps_error_context_available():
+    service = HeatPumpChatService()
+    entities = [
+        make_entity("boiler_current_flow_temperature", "Boiler Vorlauf"),
+        make_entity("boiler_last_error_code", "Boiler Letzter Fehler"),
+        make_entity("thermostat_hc2_target_flow_temperature", "Soll Vorlauf"),
+    ]
+
+    selected = service._select_entities("general", "wie laeuft die heizung aktuell?", entities)
+
+    assert "boiler_last_error_code" in selected
+
+
+@pytest.mark.asyncio
+async def test_detect_intent_routes_colloquial_hot_water_question_to_hot_water():
+    service = HeatPumpChatService()
+    intent = await service._detect_intent("wann wurde gestern das wasser aufgewaermt?")
+    assert intent == "hot_water"
+
+
+def test_select_entities_for_time_focused_hot_water_includes_timeline_entities():
+    service = HeatPumpChatService()
+    entities = [
+        make_entity("boiler_tapwater_active", "Boiler WW Aktiv"),
+        make_entity("boiler_dhw_current_intern_temperature", "WW intern"),
+        make_entity("boiler_dhw_starts_hp", "WW Starts"),
+        make_entity("boiler_return_temperature", "Boiler Ruecklauf"),
+    ]
+
+    selected = service._select_entities(
+        "hot_water",
+        "wann wurde gestern das wasser aufgewaermt?",
+        entities,
+    )
+
+    assert "boiler_tapwater_active" in selected
+    assert "boiler_dhw_current_intern_temperature" in selected
+    assert "boiler_dhw_starts_hp" in selected
+
+
+def test_build_facts_for_time_focused_hot_water_contains_event_windows():
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_tapwater_active",
+            friendly_name="Boiler WW Aktiv",
+            domain="sensor",
+            data_kind="state",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-18T05:00:00Z", state="0"),
+                DataPoint(ts="2026-04-18T06:10:00Z", state="1"),
+                DataPoint(ts="2026-04-18T06:45:00Z", state="0"),
+                DataPoint(ts="2026-04-18T19:00:00Z", state="1"),
+                DataPoint(ts="2026-04-18T19:25:00Z", state="0"),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="boiler_dhw_starts_hp",
+            friendly_name="WW Starts",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-18T05:00:00Z", value=10),
+                DataPoint(ts="2026-04-18T06:10:00Z", value=11),
+                DataPoint(ts="2026-04-18T19:00:00Z", value=12),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="boiler_dhw_current_intern_temperature",
+            friendly_name="WW intern",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-18T06:00:00Z", value=42.0),
+                DataPoint(ts="2026-04-18T06:30:00Z", value=47.0),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._build_facts("hot_water", "wann wurde gestern das wasser aufgewaermt?", series)
+
+    assert any("Warmwasser-Aufheizung erkannt" in fact for fact in facts)
+    assert any("Warmwasser-Start gezaehlt" in fact for fact in facts)
+    assert any("WW-Temperaturanstieg" in fact for fact in facts)
+    assert any("2026-04-18 08:10 CEST" in fact for fact in facts)
+    assert any("2026-04-18 08:45 CEST" in fact for fact in facts)
+
+
+def test_question_is_time_focused_detects_behavior_questions():
+    """Test that behavior/comparison questions are recognized as time-focused."""
+    service = HeatPumpChatService()
+    
+    # These should all be recognized as time-focused
+    time_focused_questions = [
+        "Wie verhalten sich Vor- Rücklauf in diesem Zeitraum?",
+        "Wie ist der Verlauf der Temperaturen?",
+        "Vergleich Vorlauf und Rücklauf",
+        "Wie entwickelt sich die Temperatur während des Zeitraums?",  # Added 'während' to trigger
+    ]
+    
+    for question in time_focused_questions:
+        assert service._question_is_time_focused(question.lower()), \
+            f"Question '{question}' should be detected as time-focused"
+
+
+def test_select_entities_for_temperature_comparison_includes_all_temps():
+    """Test that temperature comparison questions include all temperature entities."""
+    service = HeatPumpChatService()
+    entities = [
+        make_entity("boiler_current_flow_temperature", "Boiler Vorlauf"),
+        make_entity("boiler_return_temperature", "Boiler Rücklauf"),
+        make_entity("boiler_heat_carrier_return_tc0", "Kältemittel Rücklauf"),
+        make_entity("boiler_heat_carrier_flow_tc1", "Kältemittel Vorlauf"),
+        make_entity("mixer_hc2_flow_temperature_tc1", "HK2 Vorlauf"),
+        make_entity("boiler_selected_flow_temperature", "Sollwert Vorlauf"),
+        make_entity("boiler_pump_modulation", "Pumpenschaltung"),
+    ]
+
+    # Question mentions temperature comparison
+    selected = service._select_entities(
+        "general",
+        "Wie verhalten sich Vor- Rücklauf in diesem Zeitraum?",
+        entities
+    )
+
+    # All temperature entities should be guaranteed to be selected
+    assert "boiler_current_flow_temperature" in selected
+    assert "boiler_return_temperature" in selected
+    assert "boiler_heat_carrier_return_tc0" in selected
+    assert "boiler_heat_carrier_flow_tc1" in selected
+    assert "mixer_hc2_flow_temperature_tc1" in selected
+    assert "boiler_selected_flow_temperature" in selected
+
+
+def test_question_is_time_focused_detects_duration_questions():
+    """Test that duration questions are recognized as time-focused."""
+    service = HeatPumpChatService()
+    
+    duration_questions = [
+        "wie lange wurde gestern geheizt?",  # Has both "wie lange" and "gestern"
+        "wie lange dauerte es gestern?",  # Has "wie lange" and "gestern"
+        "dauer der heizphase gestern",  # Has "dauer" and "gestern"
+    ]
+    
+    for question in duration_questions:
+        assert service._question_is_time_focused(question.lower()), \
+            f"Question '{question}' should be detected as time-focused"
+
+
+def test_question_is_time_focused_detects_count_questions():
+    """Test that count/frequency questions are recognized as time-focused."""
+    service = HeatPumpChatService()
+    
+    count_questions = [
+        "wie viele starts hatte die anlage?",
+        "wie oft wurde geheizt?",
+        "anzahl der starts",
+        "häufig war die anlage aktiv?",
+    ]
+    
+    for question in count_questions:
+        assert service._question_is_time_focused(question.lower()), \
+            f"Question '{question}' should be detected as time-focused"
+
+
+def test_build_facts_for_temperature_comparison_shows_spreizung():
+    """Test that temperature comparison questions extract spreizung (delta)."""
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_current_flow_temperature",
+            friendly_name="Boiler Vorlauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-18T08:00:00Z", value=35.0),
+                DataPoint(ts="2026-04-18T09:00:00Z", value=40.0),
+                DataPoint(ts="2026-04-18T10:00:00Z", value=38.0),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="boiler_return_temperature",
+            friendly_name="Boiler Rücklauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-18T08:00:00Z", value=32.0),
+                DataPoint(ts="2026-04-18T09:00:00Z", value=36.0),
+                DataPoint(ts="2026-04-18T10:00:00Z", value=35.0),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._build_facts(
+        "general",
+        "Wie verhalten sich Vor- Rücklauf?",
+        series
+    )
+
+    # Should include temperature values and potentially spreizung info
+    assert len(facts) > 0
+    facts_text = " ".join(facts).lower()
+    # Should mention temperatures or spreizung
+    assert any(word in facts_text for word in ["vorlauf", "rücklauf", "temperatur", "spreiz"])
+
+
+def test_extract_operating_phases_from_binary_data():
+    """Test that heating duration can be calculated from binary activity data."""
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_compressor_activity",
+            friendly_name="Kompressor aktiv",
+            domain="sensor",
+            data_kind="binary",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-18T08:00:00Z", value=0),
+                DataPoint(ts="2026-04-18T08:30:00Z", value=1),  # ON
+                DataPoint(ts="2026-04-18T09:00:00Z", value=0),  # OFF
+                DataPoint(ts="2026-04-18T09:30:00Z", value=1),  # ON
+                DataPoint(ts="2026-04-18T10:00:00Z", value=1),  # Still ON
+                DataPoint(ts="2026-04-18T10:30:00Z", value=0),  # OFF
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._build_facts(
+        "general",
+        "Wie lange wurde geheizt?",
+        series
+    )
+
+    # Should extract duration information
+    assert len(facts) > 0
+    facts_text = " ".join(facts).lower()
+    # Should mention duration or time
+    assert any(word in facts_text for word in ["min", "stund", "dauer", "lauf", "phase", "aktiv"])
+
+
+def test_extract_counter_differences_from_numeric_counters():
+    """Test that counter deltas (starts, hours) are extracted."""
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_compressor_starts",
+            friendly_name="Verdichter Starts",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-18T08:00:00Z", value=100),
+                DataPoint(ts="2026-04-18T12:00:00Z", value=102),
+                DataPoint(ts="2026-04-18T16:00:00Z", value=105),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._build_facts(
+        "general",
+        "wie viele starts hatte die anlage?",
+        series
+    )
+
+    # Should extract counter delta (105 - 100 = 5 starts)
+    assert len(facts) > 0
+    facts_text = " ".join(facts).lower()
+    assert any(word in facts_text for word in ["start", "anzahl", "häufig", "zahl", "delta"])

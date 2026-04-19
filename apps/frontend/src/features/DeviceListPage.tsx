@@ -1,10 +1,31 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
+import axios from 'axios';
 import api from '../lib/api';
 import type { Device } from '../types/api';
 import { Database, Plus, ChevronRight, Power, Activity } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../hooks/useAuth';
+
+const getDeviceErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status === 401) {
+      return 'Ihre Sitzung ist abgelaufen. Bitte neu anmelden.';
+    }
+    if (status === 403) {
+      return 'Sie haben keine Berechtigung, diese Geraete zu sehen.';
+    }
+    if (status === 500) {
+      return 'Interner Serverfehler beim Laden der Geraete. Bitte Seite neu laden.';
+    }
+    const detail = error.response?.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+  }
+  return 'Die Verbindung zum Server konnte nicht hergestellt werden.';
+};
 
 const DeviceListPage: React.FC = () => {
   const { user } = useAuthStore();
@@ -42,7 +63,7 @@ const DeviceListPage: React.FC = () => {
     return (
       <div className="bg-red-50 text-red-600 p-6 rounded-xl border border-red-100">
         <h3 className="font-bold mb-2">Fehler beim Laden der Geräte</h3>
-        <p>Die Verbindung zum Server konnte nicht hergestellt werden.</p>
+        <p>{getDeviceErrorMessage(error)}</p>
       </div>
     );
   }

@@ -29,6 +29,8 @@ export interface Device {
   display_name: string;
   slug: string;
   source_type: string;
+  manufacturer?: string;
+  heat_pump_type?: string;
   influx_database_name: string;
   retention_policy?: string;
   source_config?: Record<string, any>;
@@ -207,4 +209,32 @@ export interface AnalysisResponse {
   raw_summary?: any;
   deep_analysis_result?: DeepAnalysisResponse;
   analysis_run_id?: string;
+}
+
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface HeatPumpChatRequest {
+  question: string;
+  from?: string;
+  to?: string;
+  language?: string;
+  history?: ChatTurn[];
+}
+
+export interface HeatPumpChatResponse {
+  intent: string;
+  answer: string;
+  used_entity_ids: string[];
+  evidence: string[];
+  timeframe: {
+    from: string;
+    to: string;
+    from_local?: string;
+    to_local?: string;
+    timezone?: string;
+  };
+  disclaimer: string;
 }

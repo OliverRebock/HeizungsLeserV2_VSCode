@@ -54,6 +54,8 @@ async def create_device(db: AsyncSession, device_in: DeviceCreate) -> Device:
         display_name=device_in.display_name,
         slug=device_slug,
         source_type=device_in.source_type,
+        manufacturer=device_in.manufacturer,
+        heat_pump_type=device_in.heat_pump_type,
         influx_database_name=influx_db_name,
         influx_token=generated_token, # Neuer Token wird hier zugewiesen
         retention_policy=device_in.retention_policy,

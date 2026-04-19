@@ -72,7 +72,8 @@ class DeviceAnalysisService:
             device=device,
             entity_ids=request.entity_ids,
             start=request.start,
-            end=request.end
+            end=request.end,
+            apply_timeframe_filter=True
         )
 
         if not summary_data.get("entities"):
@@ -162,7 +163,8 @@ class DeviceAnalysisService:
             device=device,
             entity_ids=request.entity_ids,
             start=request.start,
-            end=request.end
+            end=request.end,
+            apply_timeframe_filter=True
         )
 
         if not summary_data.get("entities"):

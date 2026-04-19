@@ -102,11 +102,21 @@ class HeatingSummaryService:
             "options": options,
         }
 
-    def _extract_error_candidate(self, eid: str, label: str, points: List[Any]) -> Optional[Dict[str, Any]]:
+    def _extract_error_candidate(
+        self, 
+        eid: str, 
+        label: str, 
+        points: List[Any],
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Robust extraction of error codes from timeseries points.
         Patterns: (5140), E01, F1, 5140 in suspicious strings.
         Classification: active vs. historical based on indicators like '--' or 'last'.
+        
+        Only considers errors that occur within the [start, end] timeframe.
+        Ignores errors from before the analysis window (e.g., previous_sample).
         """
         candidate: Optional[Dict[str, Any]] = None
 
@@ -114,6 +124,21 @@ class HeatingSummaryService:
             val = self._get_point_attr(p, "value")
             state = self._get_point_attr(p, "state")
             point_ts = self._normalize_point_timestamp(self._get_point_attr(p, "ts"))
+            
+            # FILTER: Only consider errors within the analysis timeframe
+            # This ensures we don't include errors from the previous_sample (before start)
+            if (start is not None or end is not None) and point_ts is not None:
+                try:
+                    point_dt = datetime.fromisoformat(point_ts.replace('Z', '+00:00')) if isinstance(point_ts, str) else point_ts
+                    
+                    if start is not None and isinstance(start, datetime) and point_dt < start:
+                        continue  # Skip errors before the analysis window
+                    
+                    if end is not None and isinstance(end, datetime) and point_dt > end:
+                        continue  # Skip errors after the analysis window
+                except (ValueError, AttributeError):
+                    # If timestamp parsing fails, include the error to be safe
+                    pass
             
             # Check both value and state as codes can hide in either
             targets = []
@@ -184,10 +209,14 @@ class HeatingSummaryService:
         device: Device, 
         entity_ids: Optional[List[str]] = None,
         start: Optional[datetime] = None,
-        end: Optional[datetime] = None
+        end: Optional[datetime] = None,
+        apply_timeframe_filter: bool = False
     ) -> Dict[str, Any]:
         """
         Loads and aggregates data from InfluxDB 2 to provide a compact summary for the AI.
+        
+        If apply_timeframe_filter is True, errors are filtered to only show those within [start, end].
+        This is typically True for time-based analyses, False for general summaries.
         """
         import uuid
         analysis_run_id = str(uuid.uuid4())
@@ -307,7 +336,12 @@ class HeatingSummaryService:
             }
 
             # 4. Deep Error Code Extraction & Candidate Identification
-            error_candidate = self._extract_error_candidate(eid, label, points)
+            # Only apply timeframe filter if explicitly requested (for time-based analyses)
+            error_candidate = self._extract_error_candidate(
+                eid, label, points, 
+                start=start if apply_timeframe_filter else None, 
+                end=end if apply_timeframe_filter else None
+            )
             if error_candidate:
                 summary["error_candidates"].append(error_candidate)
                 logger.info(f"[{analysis_run_id}] Identified error candidate: {error_candidate['parsed_code']} in {eid} ({error_candidate['classification']})")

@@ -16,6 +16,8 @@ class Device(Base, TimestampMixin):
     
     # Abstraction for data source
     source_type: Mapped[str] = mapped_column(String(50), default="influxdb_v2")
+    manufacturer: Mapped[str] = mapped_column(String(120), nullable=True)
+    heat_pump_type: Mapped[str] = mapped_column(String(120), nullable=True)
     influx_database_name: Mapped[str] = mapped_column(String(255), nullable=False)
     influx_token: Mapped[str] = mapped_column(String(255), nullable=True)
     retention_policy: Mapped[str] = mapped_column(String(100), nullable=True)
