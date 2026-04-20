@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import axios from 'axios';
-import { Mic, Square, SendHorizontal, MessageSquareText, Loader2, AlertCircle, Activity, X, ChevronDown } from 'lucide-react';
+import { Mic, SendHorizontal, MessageSquareText, Loader2, AlertCircle, Activity, X, ChevronDown } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import type { Device, HeatPumpChatResponse } from '../types/api';
@@ -116,6 +116,12 @@ const createChatMessage = (
   createdAt: new Date().toISOString(),
 });
 
+const formatRecordingDuration = (seconds: number) => {
+  const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${mins}:${secs}`;
+};
+
 const getSpeechRecognitionErrorMessage = (error: string) => {
   switch (error) {
     case 'not-allowed':
@@ -139,11 +145,12 @@ const AnalysisChatWindowPage: React.FC = () => {
   const chatBottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const autoScrollEnabledRef = useRef(true);
   const chatDraftRef = useRef('');
-  const shouldAutoSendChatRef = useRef(false);
 
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isListening, setIsListening] = useState(false);
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
+  const [recordingDurationSeconds, setRecordingDurationSeconds] = useState(0);
   const [speechError, setSpeechError] = useState('');
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const selectedRange = (searchParams.get('range') === '24h' || searchParams.get('range') === '7d' || searchParams.get('range') === '30d')
@@ -180,6 +187,25 @@ const AnalysisChatWindowPage: React.FC = () => {
   useEffect(() => {
     chatDraftRef.current = chatInput;
   }, [chatInput]);
+
+  useEffect(() => {
+    if (!isListening || recordingStartedAt === null) {
+      setRecordingDurationSeconds(0);
+      return;
+    }
+
+    const updateDuration = () => {
+      const now = Date.now();
+      setRecordingDurationSeconds(Math.max(0, Math.floor((now - recordingStartedAt) / 1000)));
+    };
+
+    updateDuration();
+    const intervalId = window.setInterval(updateDuration, 250);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isListening, recordingStartedAt]);
 
   const scrollChatToBottom = (behavior: ScrollBehavior = 'smooth') => {
     const anchor = chatBottomAnchorRef.current;
@@ -282,7 +308,7 @@ const AnalysisChatWindowPage: React.FC = () => {
     chatMutation.mutate(trimmedMessage);
   };
 
-  const startSpeechInput = (autoSendOnEnd = false) => {
+  const startSpeechInput = () => {
     if (!speechRecognitionApi) {
       setSpeechError('Dieser Browser unterstuetzt keine Spracheingabe. Empfohlen: aktuelles Chrome oder Edge.');
       return;
@@ -292,7 +318,6 @@ const AnalysisChatWindowPage: React.FC = () => {
       return;
     }
 
-    shouldAutoSendChatRef.current = autoSendOnEnd;
     setSpeechError('');
 
     const recognition = new speechRecognitionApi();
@@ -313,21 +338,17 @@ const AnalysisChatWindowPage: React.FC = () => {
     recognition.onerror = (event) => {
       setSpeechError(getSpeechRecognitionErrorMessage(event.error));
       setIsListening(false);
-      shouldAutoSendChatRef.current = false;
+      setRecordingStartedAt(null);
     };
 
     recognition.onend = () => {
       setIsListening(false);
-      const shouldAutoSend = shouldAutoSendChatRef.current;
-      shouldAutoSendChatRef.current = false;
-
-      if (shouldAutoSend) {
-        handleSendChatMessage(chatDraftRef.current);
-      }
+      setRecordingStartedAt(null);
     };
 
     recognitionRef.current = recognition;
     setIsListening(true);
+    setRecordingStartedAt(Date.now());
     recognition.start();
   };
 
@@ -337,6 +358,15 @@ const AnalysisChatWindowPage: React.FC = () => {
     }
 
     recognitionRef.current?.stop();
+  };
+
+  const toggleSpeechInput = () => {
+    if (isListening) {
+      stopSpeechInput();
+      return;
+    }
+
+    startSpeechInput();
   };
 
   if (!selectedDeviceId) {
@@ -495,35 +525,22 @@ const AnalysisChatWindowPage: React.FC = () => {
 
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="text-[11px] text-slate-500">
-                  Mit Enter senden, mit Shift + Enter Zeilenumbruch. Mikrofon gedrueckt halten, sprechen, loslassen: dann wird automatisch gesendet.
+                  Mit Enter senden, mit Shift + Enter Zeilenumbruch. Mikrofon antippen zum Starten, erneut tippen zum Stoppen.
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      startSpeechInput(true);
-                    }}
-                    onPointerUp={(event) => {
-                      event.preventDefault();
-                      stopSpeechInput();
-                    }}
-                    onPointerLeave={() => {
-                      stopSpeechInput();
-                    }}
-                    onPointerCancel={() => {
-                      stopSpeechInput();
-                    }}
+                    onClick={toggleSpeechInput}
                     disabled={!speechSupported && !isListening}
-                    title={isListening ? 'Spracheingabe laeuft' : 'Zum Sprechen gedrueckt halten'}
-                    aria-label={isListening ? 'Spracheingabe laeuft' : 'Zum Sprechen gedrueckt halten'}
-                    className={`inline-flex h-11 w-11 select-none touch-none items-center justify-center rounded-full border shadow-sm transition ${
+                    title={isListening ? 'Aufnahme stoppen' : 'Aufnahme starten'}
+                    aria-label={isListening ? 'Aufnahme stoppen' : 'Aufnahme starten'}
+                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full border shadow-sm transition ${
                       isListening
-                        ? 'scale-95 border-red-200 bg-red-50 text-red-700 shadow-inner'
+                        ? 'border-red-200 bg-red-50 text-red-700 shadow-inner'
                         : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50'
                     }`}
                   >
-                    {isListening ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                    <Mic className="h-4 w-4" />
                   </button>
 
                   <button
@@ -537,6 +554,27 @@ const AnalysisChatWindowPage: React.FC = () => {
                   </button>
                 </div>
               </div>
+
+              {isListening && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-red-700">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-red-500" />
+                      Aufnahme laeuft...
+                    </div>
+                    <span className="font-mono text-xs">{formatRecordingDuration(recordingDurationSeconds)}</span>
+                  </div>
+                  <div className="mt-2 flex items-end gap-1">
+                    <span className="h-2 w-1 animate-pulse rounded bg-red-300" />
+                    <span className="h-4 w-1 animate-pulse rounded bg-red-400 [animation-delay:120ms]" />
+                    <span className="h-3 w-1 animate-pulse rounded bg-red-300 [animation-delay:240ms]" />
+                    <span className="h-5 w-1 animate-pulse rounded bg-red-500 [animation-delay:360ms]" />
+                    <span className="h-3 w-1 animate-pulse rounded bg-red-300 [animation-delay:480ms]" />
+                    <span className="h-4 w-1 animate-pulse rounded bg-red-400 [animation-delay:600ms]" />
+                    <span className="h-2 w-1 animate-pulse rounded bg-red-300 [animation-delay:720ms]" />
+                  </div>
+                </div>
+              )}
 
               {!speechSupported && (
                 <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
