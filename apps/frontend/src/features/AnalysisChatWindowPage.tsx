@@ -295,6 +295,13 @@ const AnalysisChatWindowPage: React.FC = () => {
       return;
     }
 
+    // Sending the message should always end an active recording session.
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      setRecordingStartedAt(null);
+    }
+
     setSpeechError('');
     setChatMessages((current) => [
       ...current,
