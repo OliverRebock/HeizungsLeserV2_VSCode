@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import asyncio
 
 import httpx
 import pytz
@@ -32,8 +33,10 @@ class HeatPumpChatService:
     def __init__(self) -> None:
         self.api_key = settings.OPENAI_API_KEY
         self.model = settings.OPENAI_MODEL_PRIMARY
+        self.fallback_models = [m.strip() for m in settings.OPENAI_MODEL_FALLBACKS.split(",") if m.strip() and m.strip() != self.model]
         self.timeout = settings.OPENAI_TIMEOUT_SECONDS
         self.openai_enabled = settings.OPENAI_ANALYSIS_ENABLED and bool(self.api_key)
+        self.require_external_for_chat = settings.OPENAI_CHAT_REQUIRE_EXTERNAL
         self.display_timezone_name = settings.CHAT_DISPLAY_TIMEZONE
         try:
             self.display_timezone = ZoneInfo(self.display_timezone_name)
@@ -65,7 +68,12 @@ class HeatPumpChatService:
         if heat_pump_type:
             logger.debug("Using heat pump type context for chat selection: %s", heat_pump_type)
 
-        selected_entities = self._select_entities(intent, resolved_question, entities, manufacturer=manufacturer)
+        requested_entity_ids = [entity_id.strip() for entity_id in request.entity_ids if entity_id.strip()]
+        available_entity_ids = {entity.entity_id for entity in entities}
+        selected_entities = [entity_id for entity_id in requested_entity_ids if entity_id in available_entity_ids]
+
+        if not selected_entities:
+            selected_entities = self._select_entities(intent, resolved_question, entities, manufacturer=manufacturer)
 
         # Fallback on broad operation intent, but still bounded entity count.
         if not selected_entities:
@@ -168,6 +176,24 @@ class HeatPumpChatService:
     async def _detect_intent(self, question: str) -> str:
         # Fast path: deterministic keyword routing avoids an extra OpenAI call.
         lower = question.lower()
+        if any(token in lower for token in ["fehlerfrei", "störungsfrei", "stoerungsfrei", "ohne fehler", "keine stoerung", "keine störung"]):
+            return "health"
+        if any(
+            phrase in lower
+            for phrase in [
+                "wie geht es der heizung",
+                "wie geht's der heizung",
+                "wie gehts der heizung",
+                "wie geht es meiner heizung",
+                "wie geht's meiner heizung",
+                "wie gehts meiner heizung",
+                "zustand der heizung",
+                "gesundheitscheck",
+                "health check",
+                "schnellcheck",
+            ]
+        ):
+            return "health"
         if any(token in lower for token in ["fehler", "error", "fault", "alarm", "stoer", "stör", "warnung", "störung", "stoerung", "fehlercode"]):
             return "anomaly"
         if "takt" in lower or "haeufig" in lower or "häufig" in lower:
@@ -180,7 +206,7 @@ class HeatPumpChatService:
             return "hot_water"
         if "auffaellig" in lower or "auffällig" in lower:
             return "anomaly"
-        if "normal" in lower or "ok" in lower:
+        if any(token in lower for token in ["normal", "ok", "gesund", "zustand", "health"]):
             return "health"
 
         if not self.openai_enabled:
@@ -1101,6 +1127,10 @@ class HeatPumpChatService:
     ) -> str:
         prompt_question = resolved_question or request.question
         if not self.openai_enabled:
+            if self.require_external_for_chat:
+                raise ValueError(
+                    "Externer LLM ist fuer den Chat erforderlich, aber OPENAI_ANALYSIS_ENABLED/OPENAI_API_KEY ist nicht aktiv."
+                )
             return self._local_answer(prompt_question, intent, facts)
 
         history = "\n".join([f"{turn.role}: {turn.content}" for turn in request.history[-6:]])
@@ -1132,18 +1162,43 @@ class HeatPumpChatService:
         try:
             return await self._openai_chat_text(system_prompt, user_prompt, temperature=0.2)
         except Exception:
-            logger.exception("OpenAI answer generation failed, using local fallback.")
+            logger.exception("OpenAI answer generation failed.")
+            if self.require_external_for_chat:
+                raise ValueError("Externer LLM momentan nicht verfuegbar (Rate-Limit/Quota). Bitte in 1-2 Minuten erneut versuchen.")
             return self._local_answer(prompt_question, intent, facts)
 
     def _local_answer(self, question: str, intent: str, facts: List[str]) -> str:
-        lines = [
-            f"Fazit: Einschaetzung zur Frage '{question}' auf Basis der vorliegenden Messwerte.",
-            "Wichtigste Beobachtungen:",
-        ]
-        lines.extend([f"- {fact}" for fact in facts[:5]])
-        if not facts:
-            lines.append("- Keine ausreichenden Messwerte im gewaehlten Zeitraum vorhanden.")
-        lines.append("Naechste Schritte: Vorlauf/Ruecklauf, Durchfluss und Betriebsstatus im Trend gegenpruefen; bei Auffaelligkeit den Fehlerkontext zeitlich eingrenzen.")
+        top_facts = facts[:4]
+
+        if intent == "health":
+            intro = (
+                "Kurzantwort: Nach den vorliegenden Daten wirkt der Betrieb aktuell ueberwiegend stabil. "
+                "Ein eindeutiger akuter Stoerhinweis ist hier nicht direkt erkennbar."
+            )
+            next_steps = (
+                "Wenn du sicher gehen willst: pruefe als naechstes Vorlauf/Ruecklauf, Durchfluss und Verdichterleistung im gleichen Zeitraum auf Ausreisser."
+            )
+        elif intent == "anomaly":
+            intro = (
+                "Kurzantwort: Ich kann den Betrieb aktuell nicht sicher als fehlerfrei bestaetigen. "
+                "Dafuer sollten die relevanten Fehler- und Prozesswerte gemeinsam bewertet werden."
+            )
+            next_steps = (
+                "Naechster Schritt: Fehlerstatus zeitlich mit Temperatur-, Druck- und Verdichterwerten ueberlagern und den auffaelligen Abschnitt eingrenzen."
+            )
+        else:
+            intro = f"Kurzantwort: Hier ist die Einschaetzung zu '{question}' auf Basis der vorliegenden Messwerte."
+            next_steps = (
+                "Naechster Schritt: Die wichtigsten Trendwerte gemeinsam pruefen und bei Auffaelligkeiten den Zeitraum enger ziehen."
+            )
+
+        lines = [intro]
+        if top_facts:
+            lines.append("Dafuer sprechen vor allem diese Punkte:")
+            lines.extend([f"- {fact}" for fact in top_facts])
+        else:
+            lines.append("Mir fehlen in diesem Zeitraum ausreichende Messwerte fuer eine belastbare Aussage.")
+        lines.append(next_steps)
         return "\n".join(lines)
 
     async def _openai_chat_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.0) -> Dict[str, Any]:
@@ -1169,6 +1224,36 @@ class HeatPumpChatService:
             return json.loads(content)
 
     async def _openai_chat_text(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+        models_to_try = [self.model, *self.fallback_models]
+        last_error: Optional[Exception] = None
+
+        for model_name in models_to_try:
+            for attempt in range(2):
+                try:
+                    return await self._openai_chat_text_single(model_name, system_prompt, user_prompt, temperature)
+                except httpx.HTTPStatusError as exc:
+                    status_code = exc.response.status_code
+                    should_retry = status_code in {429, 500, 502, 503, 504} and attempt == 0
+                    if should_retry:
+                        await asyncio.sleep(1)
+                        continue
+                    last_error = exc
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    break
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("OpenAI request failed without explicit error.")
+
+    async def _openai_chat_text_single(
+        self,
+        model_name: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+    ) -> str:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -1177,7 +1262,7 @@ class HeatPumpChatService:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": self.model,
+                    "model": model_name,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},

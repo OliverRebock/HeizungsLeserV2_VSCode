@@ -29,6 +29,7 @@ const AppLayout: React.FC = () => {
   const isTenantAdmin = user?.tenants?.some(t => t.role === 'tenant_admin');
 
   const isDeviceDetail = location.pathname.startsWith('/devices/');
+  const appVersion = import.meta.env.VITE_APP_VERSION || 'v2.6-dev-chat';
 
   const navItems = [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard },
@@ -104,7 +105,7 @@ const AppLayout: React.FC = () => {
 
         <div className="p-4 border-t border-slate-800">
           <div className="px-4 py-1 mb-2">
-            <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">v2.5-stable</p>
+            <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">{appVersion}</p>
           </div>
           <div className="px-4 py-3 mb-4">
             <p className="text-sm font-medium truncate">{user?.full_name || user?.email}</p>

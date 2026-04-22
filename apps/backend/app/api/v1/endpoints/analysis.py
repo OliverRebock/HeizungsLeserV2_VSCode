@@ -35,7 +35,10 @@ async def chat_with_heatpump(
     try:
         return await heatpump_chat_service.answer_question(db_device, request)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        message = str(e)
+        if "Externer LLM" in message:
+            raise HTTPException(status_code=503, detail=message)
+        raise HTTPException(status_code=400, detail=message)
     except Exception as e:
         import logging
 

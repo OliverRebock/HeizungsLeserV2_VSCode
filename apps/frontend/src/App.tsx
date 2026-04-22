@@ -18,6 +18,7 @@ import {
 const LoginPage = lazy(() => import('./features/LoginPage'));
 const DeviceListPage = lazy(() => import('./features/DeviceListPage'));
 const DeviceDetailPage = lazy(() => import('./features/DeviceDetailPage'));
+const DeviceChatPage = lazy(() => import('./features/DeviceChatPage'));
 const TenantsPage = lazy(() => import('./features/TenantsPage'));
 const AnalysisPage = lazy(() => import('./features/AnalysisPage'));
 const AnalysisChatWindowPage = lazy(() => import('./features/AnalysisChatWindowPage'));
@@ -154,6 +155,7 @@ const App: React.FC = () => {
               <Route path="/" element={<Dashboard />} />
               <Route path="/devices" element={<DeviceListPage />} />
               <Route path="/devices/:deviceId" element={<DeviceDetailPage />} />
+              <Route path="/devices/:deviceId/chat" element={<DeviceChatPage />} />
               <Route path="/tenants" element={<TenantsPage />} />
               <Route path="/users" element={<UserManagementPage />} />
               <Route path="/analysis" element={<AnalysisPage />} />

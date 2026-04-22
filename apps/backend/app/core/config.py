@@ -49,8 +49,10 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL_PRIMARY: str = "gpt-5.3"
+    OPENAI_MODEL_FALLBACKS: str = "gpt-4o-mini,gpt-4o"
     OPENAI_TIMEOUT_SECONDS: int = 60
     OPENAI_ANALYSIS_ENABLED: bool = False
+    OPENAI_CHAT_REQUIRE_EXTERNAL: bool = True
     CHAT_DISPLAY_TIMEZONE: str = "Europe/Berlin"
 
     model_config = SettingsConfigDict(

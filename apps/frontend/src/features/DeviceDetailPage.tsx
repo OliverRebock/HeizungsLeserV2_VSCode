@@ -23,10 +23,11 @@ import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import { DashboardService, type DashboardItem } from '../lib/dashboard';
 import { ValueWidget, StatusWidget, MiniChartWidget } from '../components/DashboardWidgets';
+import DeviceChatPanel from './components/DeviceChatPanel';
 
 const DeviceDetailPage: React.FC = () => {
   const { deviceId } = useParams<{ deviceId: string }>();
-  const [activeTab, setActiveTab] = useState<'overview' | 'entities' | 'charts' | 'dashboard'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'entities' | 'charts' | 'dashboard' | 'chat'>('overview');
   const [searchQuery, setSearchQuery] = useState('');
   const [domainFilter, setDomainFilter] = useState<string>('all');
   const [kindFilter, setKindFilter] = useState<string>('all');
@@ -1015,6 +1016,10 @@ const DeviceDetailPage: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Link to={`/devices/${device.id}/chat`} className="px-4 py-2 text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition text-sm font-medium flex items-center gap-2">
+              <Search className="w-4 h-4" />
+              <span>KI-Chat</span>
+            </Link>
             <Link to="/devices" className="px-4 py-2 text-slate-600 hover:bg-slate-50 border border-slate-200 rounded-lg transition text-sm font-medium flex items-center gap-2">
               <ArrowLeft className="w-4 h-4" />
               <span>Zurück</span>
@@ -1030,6 +1035,7 @@ const DeviceDetailPage: React.FC = () => {
           { id: 'dashboard', label: 'Dashboard', icon: Layout },
           { id: 'entities', label: 'Alle Entitäten', icon: List },
           { id: 'charts', label: 'Vergleiche', icon: BarChart3 },
+          { id: 'chat', label: 'KI-Chat', icon: Search },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -1585,6 +1591,10 @@ const DeviceDetailPage: React.FC = () => {
               </div>
             )}
           </div>
+        )}
+
+        {activeTab === 'chat' && deviceId && (
+          <DeviceChatPanel deviceId={deviceId} />
         )}
 
         {/* Detail Modal */}

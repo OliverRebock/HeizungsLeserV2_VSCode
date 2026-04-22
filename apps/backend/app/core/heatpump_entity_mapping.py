@@ -141,7 +141,7 @@ INTENT_ENTITY_PROFILES: Dict[str, IntentEntityProfile] = {
             "druck",
             "pressure",
         ],
-        question_keywords=["normal", "ok", "gesund", "zustand", "status"],
+        question_keywords=["normal", "ok", "gesund", "zustand", "status", "schnellcheck", "health", "wie geht es"],
         fallback_entity_limit=10,
     ),
     "general": IntentEntityProfile(

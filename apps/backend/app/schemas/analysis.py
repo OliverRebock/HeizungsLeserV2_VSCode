@@ -1,4 +1,4 @@
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Literal
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -29,6 +29,7 @@ class HeatPumpChatRequest(BaseModel):
     end: Optional[datetime] = Field(None, alias="to")
     language: str = "de"
     history: List[ChatTurn] = Field(default_factory=list)
+    entity_ids: List[str] = Field(default_factory=list)
 
     class Config:
         populate_by_name = True
@@ -41,6 +42,46 @@ class HeatPumpChatResponse(BaseModel):
     evidence: List[str] = Field(default_factory=list)
     timeframe: Dict[str, str]
     disclaimer: str = "Die Antwort ist eine datenbasierte KI-Einschaetzung und ersetzt keine fachliche Vor-Ort-Pruefung."
+
+
+class DeviceChatRequest(BaseModel):
+    question: str
+    start: Optional[datetime] = Field(None, alias="from")
+    end: Optional[datetime] = Field(None, alias="to")
+    language: str = "de"
+    selected_entity_ids: List[str] = Field(default_factory=list)
+    history: List[ChatTurn] = Field(default_factory=list)
+    use_server_history: bool = True
+    max_history_turns: int = 10
+
+    class Config:
+        populate_by_name = True
+
+
+class DeviceChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: datetime
+    detected_intent: Optional[str] = None
+    resolved_entities: List[str] = Field(default_factory=list)
+    used_time_range: Optional[Dict[str, str]] = None
+
+
+class DeviceChatResponse(BaseModel):
+    answer: str
+    detected_intent: str
+    resolved_entities: List[str] = Field(default_factory=list)
+    used_time_range: Dict[str, str]
+    evidence: List[str] = Field(default_factory=list)
+    confidence: str = "medium"
+    uncertainty: Optional[str] = None
+    chart_suggestions: List[str] = Field(default_factory=list)
+    disclaimer: str = "Die Antwort ist eine datenbasierte KI-Einschaetzung und ersetzt keine fachliche Vor-Ort-Pruefung."
+
+
+class DeviceChatHistoryResponse(BaseModel):
+    device_id: int
+    history: List[DeviceChatMessage] = Field(default_factory=list)
 
 class Finding(BaseModel):
     title: str

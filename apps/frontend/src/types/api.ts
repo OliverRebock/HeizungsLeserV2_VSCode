@@ -222,6 +222,7 @@ export interface HeatPumpChatRequest {
   to?: string;
   language?: string;
   history?: ChatTurn[];
+  entity_ids?: string[];
 }
 
 export interface HeatPumpChatResponse {
@@ -237,4 +238,47 @@ export interface HeatPumpChatResponse {
     timezone?: string;
   };
   disclaimer: string;
+}
+
+export interface DeviceChatRequest {
+  question: string;
+  from?: string;
+  to?: string;
+  language?: string;
+  selected_entity_ids?: string[];
+  history?: ChatTurn[];
+  use_server_history?: boolean;
+  max_history_turns?: number;
+}
+
+export interface DeviceChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+  detected_intent?: string | null;
+  resolved_entities?: string[];
+  used_time_range?: {
+    from: string;
+    to: string;
+  } | null;
+}
+
+export interface DeviceChatResponse {
+  answer: string;
+  detected_intent: string;
+  resolved_entities: string[];
+  used_time_range: {
+    from: string;
+    to: string;
+  };
+  evidence: string[];
+  confidence: string;
+  uncertainty?: string | null;
+  chart_suggestions: string[];
+  disclaimer: string;
+}
+
+export interface DeviceChatHistoryResponse {
+  device_id: number;
+  history: DeviceChatMessage[];
 }

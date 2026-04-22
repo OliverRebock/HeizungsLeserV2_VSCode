@@ -4,6 +4,7 @@ import axios from 'axios';
 import { Mic, SendHorizontal, MessageSquareText, Loader2, AlertCircle, Activity, X, ChevronDown } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
+import MarkdownMessage from '../components/MarkdownMessage';
 import type { Device, HeatPumpChatResponse } from '../types/api';
 
 type SpeechRecognitionAlternativeLike = {
@@ -470,7 +471,11 @@ const AnalysisChatWindowPage: React.FC = () => {
                         {message.meta}
                       </p>
                     )}
-                    <p className="whitespace-pre-line text-sm leading-relaxed">{message.content}</p>
+                    {message.role === 'assistant' ? (
+                      <MarkdownMessage content={message.content} className="text-sm leading-relaxed" />
+                    ) : (
+                      <p className="whitespace-pre-line text-sm leading-relaxed">{message.content}</p>
+                    )}
                     <p className={`mt-2 text-[10px] ${message.role === 'user' ? 'text-blue-100/80' : 'text-slate-400'}`}>
                       {new Date(message.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                     </p>
