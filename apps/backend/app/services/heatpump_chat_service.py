@@ -1110,7 +1110,8 @@ class HeatPumpChatService:
             "Nutze nur die bereitgestellten relevanten Messfakten. "
             "Keine Spekulation ohne Bezug zu Fakten. "
             "Wenn Daten fehlen, benenne klar welche Messung noch gebraucht wird. "
-            "Bei Zeitfragen (z.B. wann gestern) nenne konkrete Uhrzeiten, Start/Ende und Dauer direkt aus den Fakten."
+            "Bei Zeitfragen (z.B. wann gestern) nenne konkrete Uhrzeiten, Start/Ende und Dauer direkt aus den Fakten. "
+            "Arbeite loesungsorientiert und knapp: erst klares Fazit, dann die wichtigsten Beobachtungen."
         )
         user_prompt = (
             f"Intent: {intent}\n"
@@ -1120,7 +1121,12 @@ class HeatPumpChatService:
             f"Frage: {prompt_question}\n\n"
             "Relevante Messfakten:\n"
             + "\n".join([f"- {fact}" for fact in facts])
-                        + "\n\nAntworte kurz in 4-8 Saetzen und nenne am Ende 1-3 konkrete Handlungsempfehlungen."
+                        + "\n\nAntwortformat:\n"
+                          "- 1 kurzes Fazit (1 Satz)\n"
+                          "- Danach 3-5 wichtigste Beobachtungen als Stichpunkte\n"
+                          "- Falls noetig 1 Satz zu Datenluecke/Unsicherheit\n"
+                          "- Zum Schluss 1-3 konkrete naechste Schritte\n"
+                          "- Kurz und direkt bleiben, keine langen Vorreden."
         )
 
         try:
@@ -1131,11 +1137,13 @@ class HeatPumpChatService:
 
     def _local_answer(self, question: str, intent: str, facts: List[str]) -> str:
         lines = [
-            f"Einschaetzung zur Frage '{question}':",
-            "Ich habe nur relevante Messpunkte aus dem gewaehlten Zeitraum ausgewertet.",
+            f"Fazit: Einschaetzung zur Frage '{question}' auf Basis der vorliegenden Messwerte.",
+            "Wichtigste Beobachtungen:",
         ]
-        lines.extend([f"- {fact}" for fact in facts[:8]])
-        lines.append("Empfehlung: Bitte Vorlauf/Ruecklauf, Durchfluss und Betriebsstatus im Trend gegenpruefen und bei Auffaelligkeit den Fehlerkontext vertiefen.")
+        lines.extend([f"- {fact}" for fact in facts[:5]])
+        if not facts:
+            lines.append("- Keine ausreichenden Messwerte im gewaehlten Zeitraum vorhanden.")
+        lines.append("Naechste Schritte: Vorlauf/Ruecklauf, Durchfluss und Betriebsstatus im Trend gegenpruefen; bei Auffaelligkeit den Fehlerkontext zeitlich eingrenzen.")
         return "\n".join(lines)
 
     async def _openai_chat_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.0) -> Dict[str, Any]:
