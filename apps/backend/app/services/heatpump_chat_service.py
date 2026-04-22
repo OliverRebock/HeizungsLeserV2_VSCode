@@ -244,8 +244,10 @@ class HeatPumpChatService:
             if self._is_error_entity_text(text):
                 if question_is_error_focused:
                     score += 8
-                elif intent in {"anomaly", "health", "general"}:
+                elif intent in {"anomaly", "health"}:
                     score += 2
+                elif intent == "general":
+                    score -= 2
                 if score > 0:
                     error_scored.append((score, entity.entity_id))
 
@@ -377,8 +379,6 @@ class HeatPumpChatService:
                 "alarm",
                 "warn",
                 "code",
-                "status",
-                "state",
                 "stoer",
                 "stör",
                 "sperr",
