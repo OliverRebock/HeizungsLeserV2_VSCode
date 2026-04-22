@@ -27,20 +27,6 @@ DOMAIN_CONTEXT = (
     "Fehlercodes sollen verstaendlich interpretiert werden und konkrete Handlungsempfehlungen enthalten."
 )
 
-EINSATZ_CHAT_SYSTEM_RULES = (
-    "Du bist ein deutschsprachiger Analyse-Assistent fuer Heizungs- und Waermepumpendaten. "
-    "Nutze ausschliesslich die bereitgestellten Messfakten aus InfluxDB-2-Auswertungen. "
-    "Arbeitsprinzipien: nur InfluxDB 2, nur Flux, kein SQL, keine erfundenen Sensoren oder Fehlercodes, keine Halluzinationen. "
-    "Wenn Datenbasis zu schwach ist, sage das klar und formuliere vorsichtig (z.B. 'ich sehe keinen Fehler', 'das spricht eher fuer ...', 'das laesst sich nicht sicher belegen'). "
-    "Nenne keine Query-Details, ausser der Nutzer fragt explizit danach. "
-    "Achte fachlich auf saubere Trennung von Stromverbrauch, Heizwaerme, Gesamtenergie, Teilzaehlern, Momentanleistung und Statussignalen. "
-    "Bei COP/Effizienz nur logisch passende Zaehler nutzen; unplausible Ergebnisse als unsicher markieren und Zaehlerzuordnung hinterfragen. "
-    "Bei Abschalt-/Aussetzungsfragen zwischen geregeltem Herunterfahren, harter Abschaltung, Schutzmodus und fehlender Waermeanforderung unterscheiden. "
-    "Abtauvorgang nicht behaupten, wenn nicht eindeutig belegt. "
-    "Wenn Zugriff auf InfluxDB-Host fehlschlaegt und Hinweise auf Mac-mini-von-Olli.local/mDNS vorliegen, benenne wahrscheinliches Hostname-/mDNS-Problem klar. "
-    "Antwortstil fuer Endnutzer: kurz, direkt, verstaendlich, praxisnah, keine langen Vorreden."
-)
-
 
 class HeatPumpChatService:
     def __init__(self) -> None:
@@ -194,8 +180,6 @@ class HeatPumpChatService:
             return "hot_water"
         if "auffaellig" in lower or "auffällig" in lower:
             return "anomaly"
-        if any(token in lower for token in ["health-check", "healthcheck", "systemcheck", "zustandscheck", "gesamtzustand", "health"]):
-            return "health"
         if "normal" in lower or "ok" in lower:
             return "health"
 
@@ -1122,9 +1106,11 @@ class HeatPumpChatService:
         history = "\n".join([f"{turn.role}: {turn.content}" for turn in request.history[-6:]])
         system_prompt = (
             f"{DOMAIN_CONTEXT}\n"
-            f"{EINSATZ_CHAT_SYSTEM_RULES}\n"
-            "Erwarte als Standarddatenquelle InfluxDB 2 mit Bucket ha_Input_rebock, Org heizungsleser, URL http://Mac-mini-von-Olli.local:8086. "
-            "Wenn konkrete Fakten dem widersprechen, arbeite strikt mit den gelieferten Fakten weiter."
+            "Du antwortest auf Deutsch, klar und praxisnah fuer einen Heizungsbauer vor Ort. "
+            "Nutze nur die bereitgestellten relevanten Messfakten. "
+            "Keine Spekulation ohne Bezug zu Fakten. "
+            "Wenn Daten fehlen, benenne klar welche Messung noch gebraucht wird. "
+            "Bei Zeitfragen (z.B. wann gestern) nenne konkrete Uhrzeiten, Start/Ende und Dauer direkt aus den Fakten."
         )
         user_prompt = (
             f"Intent: {intent}\n"
@@ -1134,11 +1120,7 @@ class HeatPumpChatService:
             f"Frage: {prompt_question}\n\n"
             "Relevante Messfakten:\n"
             + "\n".join([f"- {fact}" for fact in facts])
-            + "\n\nAntworte in diesem Schema:\n"
-              "1) Kurzes Fazit\n"
-              "2) Wichtigste Beobachtungen (3-5 Stichpunkte)\n"
-              "3) Falls noetig: Unsicherheit / Datenluecke\n"
-              "4) Optional: naechster sinnvoller Pruefschritt."
+                        + "\n\nAntworte kurz in 4-8 Saetzen und nenne am Ende 1-3 konkrete Handlungsempfehlungen."
         )
 
         try:
@@ -1148,17 +1130,12 @@ class HeatPumpChatService:
             return self._local_answer(prompt_question, intent, facts)
 
     def _local_answer(self, question: str, intent: str, facts: List[str]) -> str:
-        observations = [f"- {fact}" for fact in facts[:5]]
-        if not observations:
-            observations = ["- Keine ausreichenden Messwerte im gewaehlten Zeitraum verfuegbar."]
-
         lines = [
-            "Fazit: Auf Basis der vorliegenden Daten ist nur eine vorsichtige Einschaetzung moeglich.",
-            "Wichtigste Beobachtungen:",
-            *observations,
-            "Unsicherheit / Datenluecke: Falls relevante Status-, Fehler- oder Leistungswerte fehlen, ist die Ursache nicht sicher belegbar.",
-            "Naechster Pruefschritt: Zeitfenster rund um das Ereignis eingrenzen und Aktivstatus, Verdichterleistung, Vorlauf/Ruecklauf sowie Volumenstroeme gemeinsam pruefen.",
+            f"Einschaetzung zur Frage '{question}':",
+            "Ich habe nur relevante Messpunkte aus dem gewaehlten Zeitraum ausgewertet.",
         ]
+        lines.extend([f"- {fact}" for fact in facts[:8]])
+        lines.append("Empfehlung: Bitte Vorlauf/Ruecklauf, Durchfluss und Betriebsstatus im Trend gegenpruefen und bei Auffaelligkeit den Fehlerkontext vertiefen.")
         return "\n".join(lines)
 
     async def _openai_chat_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.0) -> Dict[str, Any]:
