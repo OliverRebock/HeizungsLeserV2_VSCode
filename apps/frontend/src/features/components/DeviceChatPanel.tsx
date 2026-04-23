@@ -211,30 +211,35 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
           <div className="py-10 text-center text-slate-500">Noch keine Chat-Nachrichten vorhanden.</div>
         ) : (
           <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
-            {messages.map((message, index) => (
-              <div
-                key={`${message.created_at}-${index}`}
-                className={`p-3 rounded-xl border ${
-                  message.role === 'assistant'
-                    ? 'bg-slate-50 border-slate-200 text-slate-800'
-                    : 'bg-blue-600 border-blue-600 text-white'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-4 mb-1.5">
-                  <span className="text-[11px] uppercase tracking-wide font-semibold opacity-80">
-                    {message.role === 'assistant' ? 'Assistent' : 'Techniker'}
-                  </span>
-                  <span className="text-[11px] opacity-70">
-                    {new Date(message.created_at).toLocaleString('de-DE')}
-                  </span>
+            {messages.map((message, index) => {
+              const normalizedRole = (message.role || '').toLowerCase().trim();
+              const isAssistant = normalizedRole === 'assistant' || normalizedRole === 'ai' || normalizedRole === 'bot' || normalizedRole === 'model';
+
+              return (
+                <div
+                  key={`${message.created_at}-${index}`}
+                  className={`p-3 rounded-xl border ${
+                    isAssistant
+                      ? 'bg-slate-50 border-slate-200 text-slate-800'
+                      : 'bg-blue-600 border-blue-600 text-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-4 mb-1.5">
+                    <span className="text-[11px] uppercase tracking-wide font-semibold opacity-80">
+                      {isAssistant ? 'Assistent' : 'Techniker'}
+                    </span>
+                    <span className="text-[11px] opacity-70">
+                      {new Date(message.created_at).toLocaleString('de-DE')}
+                    </span>
+                  </div>
+                  {isAssistant ? (
+                    <MarkdownMessage content={message.content} className="text-sm leading-6" />
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap leading-6">{message.content}</p>
+                  )}
                 </div>
-                {message.role === 'assistant' ? (
-                  <MarkdownMessage content={message.content} className="text-sm leading-6" />
-                ) : (
-                  <p className="text-sm whitespace-pre-wrap leading-6">{message.content}</p>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

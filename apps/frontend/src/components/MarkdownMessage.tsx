@@ -9,7 +9,7 @@ type MarkdownMessageProps = {
 
 const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, className }) => {
   return (
-    <div className={className}>
+    <div className={`break-words [overflow-wrap:anywhere] ${className ?? ''}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -19,6 +19,9 @@ const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, className })
           li: ({ children }) => <li className="mb-1">{children}</li>,
           strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
           em: ({ children }) => <em className="italic">{children}</em>,
+          pre: ({ children }) => (
+            <pre className="mb-2 overflow-x-auto rounded-md bg-slate-100 p-2 text-[0.9em] last:mb-0">{children}</pre>
+          ),
           code: ({ children }) => (
             <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.9em]">{children}</code>
           ),

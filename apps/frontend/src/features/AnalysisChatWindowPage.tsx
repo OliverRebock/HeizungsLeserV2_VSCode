@@ -450,38 +450,43 @@ const AnalysisChatWindowPage: React.FC = () => {
                 </div>
               )}
 
-              {chatMessages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
+              {chatMessages.map((message) => {
+                const normalizedRole = (message.role || '').toLowerCase().trim();
+                const isAssistant = normalizedRole === 'assistant' || normalizedRole === 'ai' || normalizedRole === 'bot' || normalizedRole === 'model';
+
+                return (
                   <div
-                    className={`max-w-[92%] rounded-2xl border px-4 py-3 shadow-sm ${
-                      message.role === 'user'
-                        ? 'border-blue-500 bg-gradient-to-br from-blue-600 to-indigo-600 text-white'
-                        : 'border-slate-200 bg-white text-slate-800'
-                    }`}
+                    key={message.id}
+                    className={`flex ${isAssistant ? 'justify-start' : 'justify-end'}`}
                   >
-                    {message.meta && (
-                      <p
-                        className={`mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-                          message.role === 'user' ? 'text-blue-100' : 'text-slate-500'
-                        }`}
-                      >
-                        {message.meta}
+                    <div
+                      className={`max-w-[92%] rounded-2xl border px-4 py-3 shadow-sm ${
+                        isAssistant
+                          ? 'border-slate-200 bg-white text-slate-800'
+                          : 'border-blue-500 bg-gradient-to-br from-blue-600 to-indigo-600 text-white'
+                      }`}
+                    >
+                      {message.meta && (
+                        <p
+                          className={`mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+                            isAssistant ? 'text-slate-500' : 'text-blue-100'
+                          }`}
+                        >
+                          {message.meta}
+                        </p>
+                      )}
+                      {isAssistant ? (
+                        <MarkdownMessage content={message.content} className="text-sm leading-relaxed" />
+                      ) : (
+                        <p className="whitespace-pre-line text-sm leading-relaxed">{message.content}</p>
+                      )}
+                      <p className={`mt-2 text-[10px] ${isAssistant ? 'text-slate-400' : 'text-blue-100/80'}`}>
+                        {new Date(message.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                       </p>
-                    )}
-                    {message.role === 'assistant' ? (
-                      <MarkdownMessage content={message.content} className="text-sm leading-relaxed" />
-                    ) : (
-                      <p className="whitespace-pre-line text-sm leading-relaxed">{message.content}</p>
-                    )}
-                    <p className={`mt-2 text-[10px] ${message.role === 'user' ? 'text-blue-100/80' : 'text-slate-400'}`}>
-                      {new Date(message.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
-                    </p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {chatMutation.isPending && (
                 <div className="flex justify-start">
