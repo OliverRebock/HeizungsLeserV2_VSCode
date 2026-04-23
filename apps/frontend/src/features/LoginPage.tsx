@@ -14,6 +14,20 @@ const LoginPage: React.FC = () => {
   const login = useAuthStore((state) => state.login);
   const navigate = useNavigate();
 
+  const buildRateLimitMessage = (retryAfterHeader?: string | null) => {
+    const retryAfter = Number.parseInt(retryAfterHeader || '', 10);
+    if (!Number.isFinite(retryAfter) || retryAfter <= 0) {
+      return 'Zu viele Login-Versuche. Bitte warte einen Moment und versuche es dann erneut.';
+    }
+
+    const minutes = Math.floor(retryAfter / 60);
+    const seconds = retryAfter % 60;
+    if (minutes <= 0) {
+      return `Zu viele Login-Versuche. Bitte warte ${seconds} Sekunden und versuche es dann erneut.`;
+    }
+    return `Zu viele Login-Versuche. Bitte warte ${minutes} Min ${seconds} Sek und versuche es dann erneut.`;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -33,7 +47,17 @@ const LoginPage: React.FC = () => {
       await login(response.data.access_token);
       navigate('/');
     } catch (err: any) {
-      setError('Login fehlgeschlagen. Bitte prüfen Sie Ihre Zugangsdaten.');
+      const status = err?.response?.status;
+      const detail = (err?.response?.data?.detail || '').toString().toLowerCase();
+      const retryAfter = err?.response?.headers?.['retry-after'] as string | undefined;
+
+      if (status === 429 || detail.includes('too many login attempts') || (status === 400 && !!retryAfter)) {
+        setError(buildRateLimitMessage(retryAfter));
+      } else if (detail.includes('inactive user')) {
+        setError('Dieses Benutzerkonto ist deaktiviert. Bitte wende dich an den Administrator.');
+      } else {
+        setError('Login fehlgeschlagen. Bitte prüfen Sie Ihre Zugangsdaten.');
+      }
     } finally {
       setIsLoading(false);
     }
