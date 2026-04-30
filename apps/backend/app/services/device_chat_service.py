@@ -32,6 +32,11 @@ class DeviceChatHistoryStore:
         key = (user_id, device_id)
         self._store[key].append(message)
 
+    def clear(self, user_id: int, device_id: int) -> None:
+        key = (user_id, device_id)
+        if key in self._store:
+            self._store[key].clear()
+
 
 class DeviceChatService:
     def __init__(self) -> None:
@@ -151,6 +156,9 @@ class DeviceChatService:
     def get_history(self, user_id: int, device_id: int, limit: int = 30) -> DeviceChatHistoryResponse:
         history = self.history.get(user_id, device_id, limit=limit)
         return DeviceChatHistoryResponse(device_id=device_id, history=history)
+
+    def clear_history(self, user_id: int, device_id: int) -> None:
+        self.history.clear(user_id, device_id)
 
 
 device_chat_service = DeviceChatService()

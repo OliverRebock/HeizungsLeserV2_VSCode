@@ -410,6 +410,7 @@ const AnalysisChatWindowPage: React.FC = () => {
               <div>
                 <h1 className="text-lg font-bold tracking-tight text-slate-900">Einsatz-Chat</h1>
                 <p className="text-sm text-slate-600">Folgefragen per Text oder Mikrofon. Antwort kommt in kurzer Monteur-Sprache.</p>
+                <p className="mt-1 text-[11px] text-indigo-700">Markdown-Hinweis: KI-Antworten nutzen Ueberschriften, Listen und Fettdruck.</p>
               </div>
             </div>
             <div className="flex items-center gap-2">

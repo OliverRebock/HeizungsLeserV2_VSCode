@@ -156,3 +156,89 @@ async def test_error_candidates_not_filtered_by_default_includes_latest_error(mo
     # Should have the latest error
     error_codes = [c.get("parsed_code") for c in summary["error_candidates"]]
     assert "5678" in error_codes
+
+
+@pytest.mark.asyncio
+async def test_summary_builds_dynamic_operating_context_for_peaks(monkeypatch):
+    async def fake_get_entities(_device):
+        return [
+            {
+                "entity_id": "sensor.custom_compressor_mode",
+                "friendly_name": "Verdichtermodus",
+                "domain": "sensor",
+                "data_kind": "state",
+            },
+            {
+                "entity_id": "binary_sensor.custom_ww_status",
+                "friendly_name": "Warmwasser aktiv",
+                "domain": "binary_sensor",
+                "data_kind": "binary",
+            },
+            {
+                "entity_id": "sensor.custom_flow_temperature",
+                "friendly_name": "Vorlauf",
+                "domain": "sensor",
+                "data_kind": "numeric",
+                "unit_of_measurement": "°C",
+            },
+            {
+                "entity_id": "sensor.custom_ww_priority",
+                "friendly_name": "WW Vorrang",
+                "domain": "binary_sensor",
+                "data_kind": "binary",
+            },
+        ]
+
+    async def fake_get_timeseries(_device, _entity_ids, _start, _end):
+        return [
+            SimpleNamespace(
+                entity_id="sensor.custom_compressor_mode",
+                points=[
+                    SimpleNamespace(value=0, state="aus", ts="2026-04-30T10:00:00+00:00"),
+                    SimpleNamespace(value=0, state="heizen", ts="2026-04-30T10:10:00+00:00"),
+                    SimpleNamespace(value=0, state="heizen", ts="2026-04-30T10:40:00+00:00"),
+                    SimpleNamespace(value=0, state="aus", ts="2026-04-30T10:45:00+00:00"),
+                ],
+            ),
+            SimpleNamespace(
+                entity_id="binary_sensor.custom_ww_status",
+                points=[
+                    SimpleNamespace(value=0, state="0", ts="2026-04-30T10:00:00+00:00"),
+                    SimpleNamespace(value=1, state="1", ts="2026-04-30T10:20:00+00:00"),
+                    SimpleNamespace(value=0, state="0", ts="2026-04-30T10:42:00+00:00"),
+                ],
+            ),
+            SimpleNamespace(
+                entity_id="sensor.custom_flow_temperature",
+                points=[
+                    SimpleNamespace(value=30.0, state=None, ts="2026-04-30T10:05:00+00:00"),
+                    SimpleNamespace(value=66.4, state=None, ts="2026-04-30T10:21:00+00:00"),
+                    SimpleNamespace(value=35.0, state=None, ts="2026-04-30T10:50:00+00:00"),
+                ],
+            ),
+            SimpleNamespace(
+                entity_id="sensor.custom_ww_priority",
+                points=[
+                    SimpleNamespace(value=1, state="1", ts="2026-04-30T10:00:00+00:00"),
+                    SimpleNamespace(value=1, state="1", ts="2026-04-30T10:30:00+00:00"),
+                ],
+            ),
+        ]
+
+    monkeypatch.setattr(influx_service, "get_entities", fake_get_entities)
+    monkeypatch.setattr(influx_service, "get_timeseries", fake_get_timeseries)
+
+    summary = await heating_summary_service.get_device_summary(device=make_device())
+
+    operating_context = summary.get("operating_context") or {}
+    status_windows = operating_context.get("status_windows") or []
+    peak_contexts = operating_context.get("temperature_peak_contexts") or []
+
+    assert any(item.get("category") == "compressor" for item in status_windows)
+    assert any(item.get("category") == "hot_water" for item in status_windows)
+    assert not any(item.get("entity_id") == "sensor.custom_ww_priority" for item in status_windows)
+    assert any(
+        item.get("entity_id") == "sensor.custom_flow_temperature"
+        and item.get("active_modes")
+        for item in peak_contexts
+    )

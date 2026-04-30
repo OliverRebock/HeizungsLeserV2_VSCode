@@ -172,33 +172,41 @@ class InfluxService:
             return name
             
         prefixes_to_remove = [
-            "ems-esp", "ebusd", "rpi", "homeassistant", "ha", 
+            "ems-esp", "ebusd", "rpi", "homeassistant", "ha", "boiler",
             "zigbee2mqtt", "tasmota", "shelly", "esphome"
         ]
         
         cleaned_name = name.strip()
-        lower_name = cleaned_name.lower()
-        
-        for prefix in prefixes_to_remove:
-            if lower_name.startswith(prefix):
-                # Remove prefix + potential separator like ": ", " - ", " " 
-                start_index = len(prefix)
-                # Check for common separators
-                if len(cleaned_name) > start_index:
-                    if cleaned_name[start_index] in [":", "-", " "]:
+        removed_any_prefix = False
+
+        while cleaned_name:
+            lower_name = cleaned_name.lower()
+            matched_prefix = False
+
+            for prefix in prefixes_to_remove:
+                if lower_name.startswith(prefix):
+                    # Remove prefix + potential separator like ": ", " - ", " "
+                    start_index = len(prefix)
+                    if len(cleaned_name) > start_index and cleaned_name[start_index] in [":", "-", " "]:
                         start_index += 1
-                        # Check for another space after ":" or "-"
                         if len(cleaned_name) > start_index and cleaned_name[start_index] == " ":
                             start_index += 1
-                
-                cleaned_name = cleaned_name[start_index:].strip()
-                # If name became empty or too short, revert to original (fallback)
-                if not cleaned_name:
-                    cleaned_name = name.strip()
+
+                    cleaned_name = cleaned_name[start_index:].strip()
+                    if not cleaned_name:
+                        cleaned_name = name.strip()
+                        matched_prefix = False
+                        break
+
+                    removed_any_prefix = True
+                    matched_prefix = True
+                    break
+
+            if not matched_prefix:
                 break
         
         # Capitalize first letter if it was lower-cased after prefix removal
-        if cleaned_name and cleaned_name[0].islower():
+        if removed_any_prefix and cleaned_name and cleaned_name[0].islower():
             cleaned_name = cleaned_name[0].upper() + cleaned_name[1:]
             
         return cleaned_name
@@ -1035,7 +1043,7 @@ class InfluxService:
                         entities.append(Entity(
                             entity_id=eid,
                             domain=domain,
-                            friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
+                            friendly_name=None,
                             data_kind=data_kind,
                             value_semantics=self._get_value_semantics(domain, data_kind=data_kind),
                             render_mode=render_mode,
@@ -1051,6 +1059,11 @@ class InfluxService:
                 from(bucket: "{bucket}")
                 |> range(start: -30d)
                 |> filter(fn: (r) => r["_field"] == "friendly_name_str" or 
+                                     r["_field"] == "friendly_name" or
+                                     r["_field"] == "name_str" or
+                                     r["_field"] == "name" or
+                                     r["_field"] == "description_str" or
+                                     r["_field"] == "description" or
                                      r["_field"] == "unit_of_measurement_str" or 
                                      r["_field"] == "state_class_str" or
                                      r["_field"] == "device_class_str" or
@@ -1058,6 +1071,7 @@ class InfluxService:
                                      r["_field"] == "value" or 
                                      r["_field"] == "state" or
                                      r["_field"] == "_value")
+                |> filter(fn: (r) => exists r["entity_id"])
                 |> last()
                 |> pivot(rowKey:["entity_id"], columnKey: ["_field"], valueColumn: "_value")
             '''
@@ -1080,8 +1094,15 @@ class InfluxService:
                         device_class = str(m.get("device_class_str")) if m.get("device_class_str") else None
                         options = self._parse_options(m.get("options_str"))
 
-                        # Friendly Name
-                        f_name = m.get("friendly_name_str")
+                        # Friendly Name (strictly from Influx metadata fields)
+                        f_name = (
+                            m.get("friendly_name_str")
+                            or m.get("friendly_name")
+                            or m.get("name_str")
+                            or m.get("name")
+                            or m.get("description_str")
+                            or m.get("description")
+                        )
                         if f_name:
                             ent.friendly_name = self._clean_friendly_name(str(f_name))
                         
@@ -1149,7 +1170,7 @@ class InfluxService:
                         entities.append(Entity(
                             entity_id=eid,
                             domain=domain,
-                            friendly_name=eid.split('.')[-1].replace('_', ' ').title(),
+                            friendly_name=None,
                             data_kind=data_kind,
                             value_semantics=self._get_value_semantics(domain, data_kind=data_kind),
                             render_mode=self._get_render_mode(data_kind),

@@ -244,6 +244,22 @@ class HeatPumpChatService:
         question_requests_error_window = self._question_requests_error_window_readout(q)
         question_asks_for_duration = any(token in q for token in ["wie lange", "dauer", "lang ist", "länge"])
         question_asks_for_count = any(token in q for token in ["wie viele", "wie oft", "anzahl", "zahl"])
+        question_asks_for_operating_status = any(
+            token in q
+            for token in [
+                "gemacht",
+                "betriebszustand",
+                "betriebsmodus",
+                "modus",
+                "verdichter",
+                "kompressor",
+                "compressor",
+                "abtau",
+                "defrost",
+                "heizen",
+                "warmwasser",
+            ]
+        )
         question_tokens = [token.strip(".,!?;:\"'()[]{}") for token in q.split() if token.strip()]
 
         scored: List[tuple[int, str]] = []
@@ -276,6 +292,9 @@ class HeatPumpChatService:
                     score -= 2
                 if score > 0:
                     error_scored.append((score, entity.entity_id))
+                elif intent in {"general", "health"}:
+                    # Keep error context candidates available even if generic scoring is low.
+                    error_scored.append((1, entity.entity_id))
 
             if question_is_time_focused and question_is_hot_water_focused and self._is_dhw_timing_entity_text(text):
                 score += 9
@@ -327,6 +346,20 @@ class HeatPumpChatService:
                         selected.append(entity.entity_id)
                         seen.add(entity.entity_id)
 
+        # Keep critical binary operating status entities in scope for "what happened when" answers.
+        if intent in {"anomaly", "health", "cycling", "general", "hot_water"} or question_is_time_focused or question_asks_for_operating_status:
+            critical_operating_entities: List[tuple[int, str]] = []
+            for entity in entities:
+                category = self._detect_operating_status_category(entity)
+                if category:
+                    critical_operating_entities.append((self._operating_status_priority(category), entity.entity_id))
+
+            critical_operating_entities.sort(key=lambda item: (item[0], item[1]))
+            for _, entity_id in critical_operating_entities[:4]:
+                if entity_id not in seen:
+                    selected.append(entity_id)
+                    seen.add(entity_id)
+
         # For fault/status-centric questions, guarantee inclusion of error-like entities.
         if question_is_error_focused or intent == "anomaly":
             error_scored.sort(key=lambda item: item[0], reverse=True)
@@ -343,6 +376,14 @@ class HeatPumpChatService:
                     seen.add(entity.entity_id)
                 if len(selected) >= max(profile.fallback_entity_limit, 18):
                     break
+
+        # Keep at least one error context signal available for broad status questions.
+        if intent in {"general", "health"} and error_scored:
+            error_scored.sort(key=lambda item: item[0], reverse=True)
+            for _, entity_id in error_scored[:2]:
+                if entity_id not in seen:
+                    selected.append(entity_id)
+                    seen.add(entity_id)
 
         for _, entity_id in scored:
             if entity_id in seen:
@@ -514,6 +555,49 @@ class HeatPumpChatService:
         ]
         return any(marker in entity_text_lower for marker in measurement_markers)
 
+    def _detect_operating_status_category(self, item: Any) -> Optional[str]:
+        text = f"{getattr(item, 'entity_id', '')} {getattr(item, 'friendly_name', '')}".lower()
+        data_kind = (getattr(item, 'data_kind', '') or '').lower()
+        render_mode = (getattr(item, 'render_mode', '') or '').lower()
+        domain = (getattr(item, 'domain', '') or '').lower()
+
+        is_state_like = (
+            data_kind in {'binary', 'enum', 'string', 'state'}
+            or render_mode == 'state_timeline'
+            or domain in {'binary_sensor', 'switch', 'lock', 'input_boolean', 'select', 'input_select'}
+        )
+
+        state_markers = ['status', 'state', 'mode', 'zustand', 'aktiv', 'activity', 'active', 'betrieb']
+        has_state_marker = any(marker in text for marker in state_markers)
+        if not is_state_like and not has_state_marker:
+            return None
+
+        if any(marker in text for marker in ['compressor', 'kompressor', 'verdichter']):
+            if has_state_marker or 'läuft' in text or 'lauf' in text:
+                return 'compressor'
+
+        if any(marker in text for marker in ['warmwasser', 'dhw', 'tapwater', 'speicher', 'ww']):
+            if has_state_marker or 'ladung' in text:
+                return 'hot_water'
+
+        if any(marker in text for marker in ['heating', 'heizen', 'heizbetrieb', 'raumheizen']):
+            if has_state_marker:
+                return 'heating'
+
+        if any(marker in text for marker in ['defrost', 'abtau']):
+            return 'defrost'
+
+        return None
+
+    def _operating_status_priority(self, category: str) -> int:
+        priority = {
+            'compressor': 0,
+            'hot_water': 1,
+            'heating': 2,
+            'defrost': 3,
+        }
+        return priority.get(category, 10)
+
     def _fallback_entities(self, intent: str, entities: List[Entity]) -> List[str]:
         profile = get_intent_profile(intent)
 
@@ -592,6 +676,12 @@ class HeatPumpChatService:
             # For broad windows (e.g. 7D/30D), provide period stats even for generic questions.
             facts.extend(self._extract_time_series_summary(series)[:10])
 
+        facts.extend(self._extract_temperature_peak_contexts(series)[:6])
+
+        if question_is_time_focused or intent in {"anomaly", "health", "cycling", "general", "hot_water"}:
+            facts.extend(self._extract_binary_activity_windows(series)[:8])
+            facts.extend(self._extract_heatpump_runtime_assessment(series, start_dt, end_dt)[:3])
+
         # Always add current values as context
         for s in series:
             latest = self._series_latest_value(s)
@@ -641,7 +731,8 @@ class HeatPumpChatService:
         summaries: List[str] = []
 
         for s in series:
-            values = [point.value for point in s.points if point.value is not None]
+            values = [self._point_numeric_state(point) for point in s.points]
+            values = [value for value in values if value is not None]
             if not values:
                 continue
 
@@ -667,6 +758,202 @@ class HeatPumpChatService:
                 )
 
         return summaries
+
+    def _extract_heatpump_runtime_assessment(
+        self,
+        series: List[TimeSeriesResponse],
+        start_dt: Optional[datetime],
+        end_dt: Optional[datetime],
+    ) -> List[str]:
+        if start_dt is None or end_dt is None or end_dt <= start_dt:
+            return []
+
+        compressor_series: Optional[TimeSeriesResponse] = None
+        for item in series:
+            category = self._detect_operating_status_category(item)
+            text = f"{item.entity_id} {item.friendly_name or ''}".lower()
+            if category == "compressor" or any(token in text for token in ["compressor", "kompressor", "verdichter"]):
+                compressor_series = item
+                break
+
+        if compressor_series is None:
+            return []
+
+        windows = self._collect_active_windows(compressor_series)
+        if not windows:
+            return []
+
+        total_runtime_min = sum(duration for _, _, duration in windows)
+        phase_count = len(windows)
+        avg_phase_min = total_runtime_min / phase_count if phase_count else 0.0
+        period_days = max((end_dt - start_dt).total_seconds() / 86400.0, 1.0 / 24.0)
+        starts_per_day = phase_count / period_days
+
+        display_name = self._resolve_display_name(compressor_series)
+        facts: List[str] = [
+            (
+                f"Waermepumpen-Hinweis: {display_name} ({compressor_series.entity_id}) hatte {phase_count} Aktivphasen "
+                f"im Zeitraum, durchschnittliche Laufphase ca. {avg_phase_min:.0f} min, Starts pro Tag ca. {starts_per_day:.1f}."
+            )
+        ]
+
+        if starts_per_day > 8.0 or avg_phase_min < 20.0:
+            facts.append(
+                "Takten-Hinweis: Die Start-/Laufzeitstruktur ist auffaellig und kann auf unguenstige Kurzzyklen hinweisen."
+            )
+        else:
+            facts.append(
+                "Takten-Hinweis: Lange zusammenhaengende Laufzeiten sind fuer eine Waermepumpe grundsaetzlich positiv; kein Hinweis auf starkes Takten allein aus der Laufzeitstruktur."
+            )
+
+        return facts
+
+    def _extract_temperature_peak_contexts(self, series: List[TimeSeriesResponse]) -> List[str]:
+        facts: List[str] = []
+        operating_series = [s for s in series if self._detect_operating_status_category(s)]
+
+        for s in series:
+            if not self._is_fault_window_measurement_text(f"{s.entity_id} {s.friendly_name or ''}".lower()):
+                continue
+
+            max_point = self._find_max_numeric_point(s)
+            if max_point is None:
+                continue
+
+            max_ts, max_val = max_point
+            unit = s.unit_of_measurement or s.meta.get("unit_of_measurement") or ""
+            suffix = f" {unit}" if unit else ""
+            display_name = self._resolve_display_name(s)
+
+            active_modes: List[str] = []
+            for status_series in operating_series:
+                category = self._detect_operating_status_category(status_series)
+                if not category:
+                    continue
+                if self._timestamp_in_active_window(status_series, max_ts):
+                    active_modes.append(self._resolve_display_name(status_series))
+
+            if active_modes:
+                facts.append(
+                    f"{display_name} ({s.entity_id}) Maximum {max_val:.1f}{suffix} um {self._format_ts(max_ts)} waehrend aktiv: {', '.join(active_modes[:3])}"
+                )
+            else:
+                nearby_context = self._nearest_status_window_context(operating_series, max_ts)
+                if nearby_context:
+                    facts.append(
+                        f"{display_name} ({s.entity_id}) Maximum {max_val:.1f}{suffix} um {self._format_ts(max_ts)} {nearby_context}"
+                    )
+                else:
+                    facts.append(
+                        f"{display_name} ({s.entity_id}) Maximum {max_val:.1f}{suffix} um {self._format_ts(max_ts)} ohne klaren Betriebsstatus im selben Zeitfenster"
+                    )
+
+        return facts
+
+    def _extract_binary_activity_windows(self, series: List[TimeSeriesResponse]) -> List[str]:
+        facts: List[str] = []
+
+        for s in series:
+            if not self._detect_operating_status_category(s):
+                continue
+
+            windows = self._extract_generic_active_windows(s)
+            if windows:
+                facts.extend(windows)
+                continue
+
+            latest = self._series_latest_value(s)
+            if latest is not None:
+                display_name = self._resolve_display_name(s)
+                facts.append(f"{display_name} ({s.entity_id}) aktueller Status: {latest}")
+
+        return facts
+
+    def _extract_generic_active_windows(self, series: TimeSeriesResponse) -> List[str]:
+        windows = self._collect_active_windows(series)
+        if not windows:
+            return []
+
+        display_name = self._resolve_display_name(series)
+        results: List[str] = [
+            f"{display_name} ({series.entity_id}) Aktiv-Phasen im Zeitraum: {len(windows)}"
+        ]
+
+        for start_ts, end_ts, duration_min in windows[-2:]:
+            results.append(
+                f"{display_name} ({series.entity_id}) aktiv von {self._format_ts(start_ts)} bis {self._format_ts(end_ts)} (ca. {duration_min} min)"
+            )
+
+        return results
+
+    def _collect_active_windows(self, series: TimeSeriesResponse) -> List[tuple[datetime, datetime, int]]:
+        windows: List[tuple[datetime, datetime, int]] = []
+        start_ts: Optional[datetime] = None
+
+        for point in series.points:
+            ts = self._parse_point_ts(point.ts)
+            state_value = self._point_numeric_state(point)
+            if ts is None or state_value is None:
+                continue
+
+            is_active = state_value >= 0.5
+            if is_active and start_ts is None:
+                start_ts = ts
+            elif not is_active and start_ts is not None:
+                duration_min = max(1, int((ts - start_ts).total_seconds() // 60))
+                windows.append((start_ts, ts, duration_min))
+                start_ts = None
+
+        if start_ts is not None and series.points:
+            end_ts = self._parse_point_ts(series.points[-1].ts)
+            if end_ts is not None and end_ts > start_ts:
+                duration_min = max(1, int((end_ts - start_ts).total_seconds() // 60))
+                windows.append((start_ts, end_ts, duration_min))
+
+        return windows
+
+    def _timestamp_in_active_window(self, series: TimeSeriesResponse, ts: datetime) -> bool:
+        for start_ts, end_ts, _ in self._collect_active_windows(series):
+            if start_ts <= ts <= end_ts:
+                return True
+        return False
+
+    def _nearest_status_window_context(self, operating_series: List[TimeSeriesResponse], ts: datetime) -> Optional[str]:
+        nearest: Optional[tuple[float, str]] = None
+
+        for status_series in operating_series:
+            display_name = self._resolve_display_name(status_series)
+            for start_ts, end_ts, _ in self._collect_active_windows(status_series):
+                if ts < start_ts:
+                    delta_seconds = (start_ts - ts).total_seconds()
+                    relation = f"{int(delta_seconds // 60)} min vor Start von {display_name}"
+                elif ts > end_ts:
+                    delta_seconds = (ts - end_ts).total_seconds()
+                    relation = f"{int(delta_seconds // 60)} min nach Ende von {display_name}"
+                else:
+                    continue
+
+                if delta_seconds > 5 * 60:
+                    continue
+
+                if nearest is None or delta_seconds < nearest[0]:
+                    nearest = (delta_seconds, relation)
+
+        return nearest[1] if nearest else None
+
+    def _find_max_numeric_point(self, series: TimeSeriesResponse) -> Optional[tuple[datetime, float]]:
+        best: Optional[tuple[datetime, float]] = None
+
+        for point in series.points:
+            ts = self._parse_point_ts(point.ts)
+            value = self._point_numeric_state(point)
+            if ts is None or value is None:
+                continue
+
+            if best is None or value > best[1]:
+                best = (ts, value)
+
+        return best
 
     def _extract_fault_window_values(self, series: List[TimeSeriesResponse]) -> List[str]:
         anchor = self._find_fault_anchor(series)
@@ -1097,20 +1384,35 @@ class HeatPumpChatService:
         return self._format_ts(dt) if dt is not None else ts
 
     def _point_numeric_state(self, point: Any) -> Optional[float]:
+        # Prefer explicit textual state when available. Some HA entities provide
+        # value=0 with state='Heizen'/'Warmwasser', where value alone is misleading.
+        if point.state not in (None, ""):
+            state = str(point.state).strip().lower()
+            if state in {
+                "on",
+                "true",
+                "ein",
+                "active",
+                "running",
+                "heizen",
+                "warmwasser",
+                "abtauen",
+                "heating",
+                "dhw",
+                "defrost",
+            }:
+                return 1.0
+            if state in {"off", "false", "aus", "idle", "inactive", "stopped"}:
+                return 0.0
+            try:
+                return float(state)
+            except Exception:
+                pass
+
         if point.value is not None:
             return float(point.value)
-        if point.state is None:
-            return None
 
-        state = str(point.state).strip().lower()
-        if state in {"on", "true", "ein", "active"}:
-            return 1.0
-        if state in {"off", "false", "aus", "idle", "inactive"}:
-            return 0.0
-        try:
-            return float(state)
-        except Exception:
-            return None
+        return None
 
     def _format_ts(self, dt: datetime) -> str:
         return dt.astimezone(self.display_timezone).strftime("%Y-%m-%d %H:%M %Z")
@@ -1141,7 +1443,10 @@ class HeatPumpChatService:
             "Keine Spekulation ohne Bezug zu Fakten. "
             "Wenn Daten fehlen, benenne klar welche Messung noch gebraucht wird. "
             "Bei Zeitfragen (z.B. wann gestern) nenne konkrete Uhrzeiten, Start/Ende und Dauer direkt aus den Fakten. "
-            "Arbeite loesungsorientiert und knapp: erst klares Fazit, dann die wichtigsten Beobachtungen."
+            "Fachregel Waermepumpe: Lange zusammenhaengende Verdichterlaufzeiten sind grundsaetzlich positiv und sprechen gegen Takten. "
+            "Bewerte Laufzeiten nur dann als auffaellig, wenn zusaetzliche Negativsignale vorliegen (z.B. hohe Startfrequenz, sehr kurze Laufphasen, extreme Temperaturspitzen ausserhalb plausibler Betriebsart oder widerspruechliche Statussignale). "
+            "Arbeite loesungsorientiert und knapp: erst klares Fazit, dann die wichtigsten Beobachtungen. "
+            "Formatiere die Antwort in sauberem Markdown (Ueberschriften, Listen, Fettdruck), ohne HTML."
         )
         user_prompt = (
             f"Intent: {intent}\n"
@@ -1156,7 +1461,8 @@ class HeatPumpChatService:
                           "- Danach 3-5 wichtigste Beobachtungen als Stichpunkte\n"
                           "- Falls noetig 1 Satz zu Datenluecke/Unsicherheit\n"
                           "- Zum Schluss 1-3 konkrete naechste Schritte\n"
-                          "- Kurz und direkt bleiben, keine langen Vorreden."
+                                                    "- Kurz und direkt bleiben, keine langen Vorreden.\n"
+                                                    "- Markdown-Hinweis: Nutze sichtbare Markdown-Struktur mit **Fettdruck** und Aufzaehlungen."
         )
 
         try:

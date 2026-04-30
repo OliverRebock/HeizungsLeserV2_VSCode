@@ -39,6 +39,9 @@ class LocalAnalysisService:
     ) -> Dict[str, Any]:
         entities = summary_data.get("entities", [])
         error_candidates = summary_data.get("error_candidates", [])
+        operating_context = summary_data.get("operating_context", {}) or {}
+        status_windows = operating_context.get("status_windows", []) or []
+        peak_contexts = operating_context.get("temperature_peak_contexts", []) or []
 
         findings: List[Dict[str, Any]] = []
         anomalies: List[Dict[str, str]] = []
@@ -110,6 +113,80 @@ class LocalAnalysisService:
 
         numeric_entities = 0
         state_entities = 0
+
+        hot_water_labels = {
+            str(item.get("label") or "")
+            for item in status_windows
+            if str(item.get("category") or "") == "hot_water"
+        }
+
+        # Highlight strong, time-correlated peaks with dynamic operating modes.
+        for peak in peak_contexts[:4]:
+            peak_label = str(peak.get("label") or peak.get("entity_id") or "Unbekannte Entität")
+            peak_value = peak.get("max_value")
+            peak_unit = str(peak.get("unit") or "").strip()
+            peak_ts = str(peak.get("max_ts") or "unbekannt")
+            active_modes = [str(mode) for mode in (peak.get("active_modes") or []) if str(mode).strip()]
+            nearby_modes = [str(mode) for mode in (peak.get("nearby_modes") or []) if str(mode).strip()]
+
+            if peak_value is None:
+                continue
+
+            mode_detail = ""
+            if active_modes:
+                mode_detail = f"Aktive Betriebsmodi zum Peak: {', '.join(active_modes)}."
+            elif nearby_modes:
+                mode_detail = f"Zeitnahe Betriebsmodi: {', '.join(nearby_modes)}."
+
+            if active_modes and any(label in hot_water_labels for label in active_modes):
+                findings.append(
+                    {
+                        "title": f"Temperaturpeak mit Warmwasser-Bezug bei {peak_label}",
+                        "severity": "medium",
+                        "description": (
+                            f"Ein Peak von {peak_value}{(' ' + peak_unit) if peak_unit else ''} wurde am {peak_ts} erkannt. "
+                            f"Der Peak liegt zeitlich in einer Warmwasserphase. {mode_detail}"
+                        ),
+                        "evidence": [
+                            f"Peak: {peak_value}{(' ' + peak_unit) if peak_unit else ''}",
+                            f"Zeitpunkt: {peak_ts}",
+                            *( [f"Aktiv: {', '.join(active_modes)}"] if active_modes else [] ),
+                        ],
+                    }
+                )
+                followup_checks.append(
+                    f"{peak_label}: Peak-Zeitpunkt mit Warmwasserladung und Soll-/Ist-Werten abgleichen ({peak_ts})."
+                )
+                overall_status = self._escalate_status(overall_status, "beobachtungswürdig")
+
+        # Flag unusually long operating windows from dynamic status detection.
+        for status in status_windows:
+            label = str(status.get("label") or status.get("entity_id") or "Unbekannter Status")
+            windows = status.get("recent_windows") or []
+            long_windows = [window for window in windows if int(window.get("duration_min", 0) or 0) >= 180]
+            if not long_windows:
+                continue
+
+            longest = max(long_windows, key=lambda item: int(item.get("duration_min", 0) or 0))
+            findings.append(
+                {
+                    "title": f"Lange Aktivphase bei {label}",
+                    "severity": "medium",
+                    "description": (
+                        f"Im ausgewählten Zeitraum wurde mindestens eine lange Aktivphase erkannt "
+                        f"(ca. {int(longest.get('duration_min', 0) or 0)} min)."
+                    ),
+                    "evidence": [
+                        f"Fensterstart: {longest.get('start')}",
+                        f"Fensterende: {longest.get('end')}",
+                        f"Dauer: {int(longest.get('duration_min', 0) or 0)} min",
+                    ],
+                }
+            )
+            followup_checks.append(
+                f"{label}: Langen Lauf auf Anforderung, Volumenstrom und Regelgrenzen prüfen."
+            )
+            overall_status = self._escalate_status(overall_status, "beobachtungswürdig")
 
         for entity in entities:
             entity_summary = entity.get("summary") or {}

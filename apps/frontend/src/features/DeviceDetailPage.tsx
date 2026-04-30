@@ -110,18 +110,6 @@ const DeviceDetailPage: React.FC = () => {
     enabled: !!deviceId && !!selectedEntityForModal,
   });
 
-  const filteredEntities = entities?.filter(e => {
-    const matchesSearch = (e.friendly_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      e.entity_id.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesDomain = domainFilter === 'all' || e.domain === domainFilter;
-    const matchesKind = kindFilter === 'all' || e.data_kind === kindFilter;
-    const matchesChartable = chartableFilter === 'all' || 
-      (chartableFilter === 'yes' && e.chartable) || 
-      (chartableFilter === 'no' && !e.chartable);
-    
-    return matchesSearch && matchesDomain && matchesKind && matchesChartable;
-  });
-
   const domains = Array.from(new Set(entities?.map(e => e.domain) || [])).sort();
   const dataKinds = Array.from(new Set(entities?.map(e => e.data_kind) || [])).sort();
 
@@ -134,6 +122,35 @@ const DeviceDetailPage: React.FC = () => {
     };
     return translations[kind] || kind;
   };
+
+  const translateDomain = (domain: string) => {
+    const translations: Record<string, string> = {
+      sensor: 'Sensor',
+      binary_sensor: 'Binärsensor',
+      switch: 'Schalter',
+      climate: 'Klima',
+      number: 'Zahl',
+      select: 'Auswahl',
+      lock: 'Schloss',
+      input_boolean: 'Boolescher Schalter',
+      device_tracker: 'Gerätetracker',
+      automation: 'Automatisierung',
+      update: 'Update',
+    };
+    return translations[domain] || domain;
+  };
+
+  const filteredEntities = entities?.filter(e => {
+    const matchesSearch = ((e.friendly_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      e.entity_id.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesDomain = domainFilter === 'all' || e.domain === domainFilter;
+    const matchesKind = kindFilter === 'all' || e.data_kind === kindFilter;
+    const matchesChartable = chartableFilter === 'all' || 
+      (chartableFilter === 'yes' && e.chartable) || 
+      (chartableFilter === 'no' && !e.chartable);
+    
+    return matchesSearch && matchesDomain && matchesKind && matchesChartable;
+  });
 
   const toggleEntity = (id: string) => {
     setSelectedEntities(prev => 
@@ -1203,7 +1220,7 @@ const DeviceDetailPage: React.FC = () => {
                   >
                     <option value="all">Alle Bereiche</option>
                     {domains.map(d => (
-                      <option key={d} value={d}>{d}</option>
+                      <option key={d} value={d}>{translateDomain(d)}</option>
                     ))}
                   </select>
                 </div>
@@ -1283,11 +1300,11 @@ const DeviceDetailPage: React.FC = () => {
                             }}
                           >
                             <td className="px-6 py-4">
-                              <div className="font-bold text-slate-900 group-hover:text-blue-700 transition" title={entity.friendly_name}>{entity.friendly_name}</div>
+                              <div className="font-bold text-slate-900 group-hover:text-blue-700 transition" title={entity.friendly_name || entity.entity_id}>{entity.friendly_name || entity.entity_id}</div>
                               <div className="text-[10px] text-slate-400 font-mono mt-0.5" title={entity.entity_id}>{entity.entity_id}</div>
                             </td>
                             <td className="px-6 py-4">
-                              <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight">{entity.domain}</span>
+                              <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight">{translateDomain(entity.domain)}</span>
                             </td>
                             <td className="px-6 py-4">
                                <div className="text-xs text-slate-600 font-medium">{translateDataKind(entity.data_kind)}</div>

@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 import numpy as np
 from app.models.device import Device
@@ -35,6 +35,130 @@ class HeatingSummaryService:
             dt = dt.replace(tzinfo=timezone.utc)
 
         return dt.isoformat()
+
+    def _parse_point_ts(self, raw_ts: Any) -> Optional[datetime]:
+        normalized = self._normalize_point_timestamp(raw_ts)
+        if not normalized:
+            return None
+        try:
+            dt = datetime.fromisoformat(normalized)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def _point_numeric_state(self, point: Any) -> Optional[float]:
+        state = self._get_point_attr(point, "state")
+        if state not in (None, ""):
+            s = str(state).strip().lower()
+            if s in {
+                "on", "true", "ein", "active", "running", "heizen", "warmwasser",
+                "abtauen", "heating", "dhw", "defrost",
+            }:
+                return 1.0
+            if s in {"off", "false", "aus", "idle", "inactive", "stopped"}:
+                return 0.0
+            try:
+                return float(s)
+            except Exception:
+                pass
+
+        value = self._get_point_attr(point, "value")
+        if value is None:
+            return None
+        try:
+            return float(str(value).replace(',', '.'))
+        except Exception:
+            return None
+
+    def _detect_operating_status_category(self, entity_id: str, label: str, data_kind: str, domain: str) -> Optional[str]:
+        text = f"{entity_id} {label}".lower()
+        kind = (data_kind or "").lower()
+        dom = (domain or "").lower()
+
+        is_state_like = kind in {"binary", "enum", "string", "state"} or dom in {
+            "binary_sensor", "switch", "lock", "input_boolean", "select", "input_select"
+        }
+        has_state_marker = any(marker in text for marker in ["status", "state", "mode", "zustand", "aktiv", "activity", "active", "betrieb"])
+
+        # Priority flags (WW-Vorrang/Priority) are often control hints, not real activity state.
+        if any(marker in text for marker in ["priority", "vorrang"]) and not has_state_marker:
+            return None
+
+        if not is_state_like and not has_state_marker:
+            return None
+
+        if any(marker in text for marker in ["compressor", "kompressor", "verdichter"]):
+            return "compressor"
+        if any(marker in text for marker in ["warmwasser", "dhw", "tapwater", "speicher", "ww"]):
+            return "hot_water"
+        if any(marker in text for marker in ["heating", "heizen", "heizbetrieb", "raumheizen"]):
+            return "heating"
+        if any(marker in text for marker in ["defrost", "abtau"]):
+            return "defrost"
+
+        return None
+
+    def _collect_active_windows(self, points: List[Any]) -> List[Tuple[datetime, datetime, int]]:
+        windows: List[Tuple[datetime, datetime, int]] = []
+        start_ts: Optional[datetime] = None
+
+        for point in points:
+            ts = self._parse_point_ts(self._get_point_attr(point, "ts"))
+            value = self._point_numeric_state(point)
+            if ts is None or value is None:
+                continue
+
+            is_active = value >= 0.5
+            if is_active and start_ts is None:
+                start_ts = ts
+            elif not is_active and start_ts is not None:
+                duration_min = max(1, int((ts - start_ts).total_seconds() // 60))
+                windows.append((start_ts, ts, duration_min))
+                start_ts = None
+
+        if start_ts is not None and points:
+            end_ts = self._parse_point_ts(self._get_point_attr(points[-1], "ts"))
+            if end_ts is not None and end_ts > start_ts:
+                duration_min = max(1, int((end_ts - start_ts).total_seconds() // 60))
+                windows.append((start_ts, end_ts, duration_min))
+
+        return windows
+
+    def _find_max_numeric_point(self, points: List[Any]) -> Optional[Tuple[datetime, float]]:
+        best: Optional[Tuple[datetime, float]] = None
+        for point in points:
+            ts = self._parse_point_ts(self._get_point_attr(point, "ts"))
+            value = self._point_numeric_state(point)
+            if ts is None or value is None:
+                continue
+            if best is None or value > best[1]:
+                best = (ts, value)
+        return best
+
+    def _timestamp_in_windows(self, ts: datetime, windows: List[Tuple[datetime, datetime, int]]) -> bool:
+        return any(start <= ts <= end for start, end, _ in windows)
+
+    def _nearest_window_relation(self, ts: datetime, windows: List[Tuple[datetime, datetime, int]]) -> Optional[str]:
+        nearest: Optional[Tuple[float, str]] = None
+        for start, end, _ in windows:
+            if ts < start:
+                delta_seconds = (start - ts).total_seconds()
+                relation = f"{int(delta_seconds // 60)} min vor Start"
+            elif ts > end:
+                delta_seconds = (ts - end).total_seconds()
+                relation = f"{int(delta_seconds // 60)} min nach Ende"
+            else:
+                continue
+
+            if delta_seconds > 5 * 60:
+                continue
+
+            if nearest is None or delta_seconds < nearest[0]:
+                nearest = (delta_seconds, relation)
+
+        return nearest[1] if nearest else None
 
     def _aggregate_states(self, values: List[Any], options: Optional[Any] = None) -> Dict[str, Any]:
         from collections import Counter
@@ -102,21 +226,11 @@ class HeatingSummaryService:
             "options": options,
         }
 
-    def _extract_error_candidate(
-        self, 
-        eid: str, 
-        label: str, 
-        points: List[Any],
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None
-    ) -> Optional[Dict[str, Any]]:
+    def _extract_error_candidate(self, eid: str, label: str, points: List[Any]) -> Optional[Dict[str, Any]]:
         """
         Robust extraction of error codes from timeseries points.
         Patterns: (5140), E01, F1, 5140 in suspicious strings.
         Classification: active vs. historical based on indicators like '--' or 'last'.
-        
-        Only considers errors that occur within the [start, end] timeframe.
-        Ignores errors from before the analysis window (e.g., previous_sample).
         """
         candidate: Optional[Dict[str, Any]] = None
 
@@ -124,21 +238,6 @@ class HeatingSummaryService:
             val = self._get_point_attr(p, "value")
             state = self._get_point_attr(p, "state")
             point_ts = self._normalize_point_timestamp(self._get_point_attr(p, "ts"))
-            
-            # FILTER: Only consider errors within the analysis timeframe
-            # This ensures we don't include errors from the previous_sample (before start)
-            if (start is not None or end is not None) and point_ts is not None:
-                try:
-                    point_dt = datetime.fromisoformat(point_ts.replace('Z', '+00:00')) if isinstance(point_ts, str) else point_ts
-                    
-                    if start is not None and isinstance(start, datetime) and point_dt < start:
-                        continue  # Skip errors before the analysis window
-                    
-                    if end is not None and isinstance(end, datetime) and point_dt > end:
-                        continue  # Skip errors after the analysis window
-                except (ValueError, AttributeError):
-                    # If timestamp parsing fails, include the error to be safe
-                    pass
             
             # Check both value and state as codes can hide in either
             targets = []
@@ -204,19 +303,21 @@ class HeatingSummaryService:
 
         return candidate
 
+    def _is_in_time_window(self, dt: Optional[datetime], start: datetime, end: datetime) -> bool:
+        if dt is None:
+            return False
+        return start <= dt <= end
+
     async def get_device_summary(
         self, 
         device: Device, 
         entity_ids: Optional[List[str]] = None,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
-        apply_timeframe_filter: bool = False
+        apply_timeframe_filter: bool = False,
     ) -> Dict[str, Any]:
         """
         Loads and aggregates data from InfluxDB 2 to provide a compact summary for the AI.
-        
-        If apply_timeframe_filter is True, errors are filtered to only show those within [start, end].
-        This is typically True for time-based analyses, False for general summaries.
         """
         import uuid
         analysis_run_id = str(uuid.uuid4())
@@ -291,8 +392,14 @@ class HeatingSummaryService:
                 "end": end.isoformat()
             },
             "entities": [],
-            "error_candidates": []
+            "error_candidates": [],
+            "operating_context": {
+                "status_windows": [],
+                "temperature_peak_contexts": [],
+            },
         }
+
+        raw_series_context: List[Dict[str, Any]] = []
 
         # We need the full entity list for labels and options
         entities_metadata_raw = await influx_service.get_entities(device)
@@ -321,6 +428,17 @@ class HeatingSummaryService:
             if not points:
                 continue
 
+            raw_series_context.append(
+                {
+                    "entity_id": eid,
+                    "label": label,
+                    "domain": domain,
+                    "data_kind": data_kind,
+                    "unit": unit,
+                    "points": points,
+                }
+            )
+
             # Check if this is truly numeric or just states
             # If we have any non-floatable values, it's a state entity
             raw_values = [self._get_point_attr(p, "value") for p in points if self._get_point_attr(p, "value") is not None]
@@ -336,12 +454,15 @@ class HeatingSummaryService:
             }
 
             # 4. Deep Error Code Extraction & Candidate Identification
-            # Only apply timeframe filter if explicitly requested (for time-based analyses)
-            error_candidate = self._extract_error_candidate(
-                eid, label, points, 
-                start=start if apply_timeframe_filter else None, 
-                end=end if apply_timeframe_filter else None
-            )
+            filtered_points = points
+            if apply_timeframe_filter:
+                filtered_points = []
+                for point in points:
+                    point_dt = self._parse_point_ts(self._get_point_attr(point, "ts"))
+                    if self._is_in_time_window(point_dt, start, end):
+                        filtered_points.append(point)
+
+            error_candidate = self._extract_error_candidate(eid, label, filtered_points)
             if error_candidate:
                 summary["error_candidates"].append(error_candidate)
                 logger.info(f"[{analysis_run_id}] Identified error candidate: {error_candidate['parsed_code']} in {eid} ({error_candidate['classification']})")
@@ -402,9 +523,195 @@ class HeatingSummaryService:
 
             summary["entities"].append(entity_summary)
 
+        status_context: List[Dict[str, Any]] = []
+        for item in raw_series_context:
+            category = self._detect_operating_status_category(
+                item["entity_id"], item["label"], item["data_kind"], item["domain"]
+            )
+            if not category:
+                continue
+
+            windows = self._collect_active_windows(item["points"])
+            numeric_values = [self._point_numeric_state(point) for point in item["points"]]
+            numeric_values = [value for value in numeric_values if value is not None]
+            active_ratio = 0.0
+            if numeric_values:
+                active_ratio = round(sum(1 for value in numeric_values if value >= 0.5) / len(numeric_values), 2)
+
+            status_context.append(
+                {
+                    "entity_id": item["entity_id"],
+                    "label": item["label"],
+                    "category": category,
+                    "active_ratio": active_ratio,
+                    "window_count": len(windows),
+                    "recent_windows": [
+                        {
+                            "start": start.isoformat(),
+                            "end": end.isoformat(),
+                            "duration_min": duration,
+                        }
+                        for start, end, duration in windows[-3:]
+                    ],
+                    "_windows": windows,
+                }
+            )
+
+        peak_contexts: List[Dict[str, Any]] = []
+        for item in raw_series_context:
+            text = f"{item['entity_id']} {item['label']}".lower()
+            if not any(keyword in text for keyword in ["temperatur", "temperature", "vorlauf", "ruecklauf", "rücklauf", "tr1", "tc"]):
+                continue
+
+            max_point = self._find_max_numeric_point(item["points"])
+            if not max_point:
+                continue
+
+            max_ts, max_value = max_point
+            active_labels: List[str] = []
+            nearby_labels: List[str] = []
+
+            for status in status_context:
+                windows = status.get("_windows", [])
+                if self._timestamp_in_windows(max_ts, windows):
+                    active_labels.append(status["label"])
+                else:
+                    relation = self._nearest_window_relation(max_ts, windows)
+                    if relation:
+                        nearby_labels.append(f"{status['label']} ({relation})")
+
+            peak_contexts.append(
+                {
+                    "entity_id": item["entity_id"],
+                    "label": item["label"],
+                    "max_value": round(float(max_value), 2),
+                    "unit": item["unit"],
+                    "max_ts": max_ts.isoformat(),
+                    "active_modes": active_labels[:3],
+                    "nearby_modes": nearby_labels[:3],
+                }
+            )
+
+        summary["operating_context"]["status_windows"] = [
+            {
+                key: value
+                for key, value in status.items()
+                if key != "_windows"
+            }
+            for status in status_context
+        ]
+        summary["operating_context"]["temperature_peak_contexts"] = peak_contexts[:8]
+
+        # === NEW: HVAC-Fachmann-Metriken ===
+        efficiency_metrics = self._calculate_efficiency_metrics(
+            raw_series_context, status_context, start, end, analysis_run_id
+        )
+        summary["operating_context"]["efficiency_metrics"] = efficiency_metrics
+
         logger.info(f"[{analysis_run_id}] Summary generated with {len(summary['entities'])} entities and {len(summary['error_candidates'])} error candidates.")
         return summary
 
+    def _calculate_efficiency_metrics(
+        self, 
+        raw_series_context: List[Dict[str, Any]], 
+        status_context: List[Dict[str, Any]], 
+        start: datetime, 
+        end: datetime,
+        run_id: str
+    ) -> Dict[str, Any]:
+        """
+        Calculate HVAC-Technician-relevant metrics:
+        - Spreizung (Supply-Return differential)
+        - Average phase length
+        - DHW ratio
+        - Cycling frequency
+        """
+        metrics = {}
+        
+        # === 1. Spreizung (Supply vs Return temperature) ===
+        supply_temps = []
+        return_temps = []
+        for item in raw_series_context:
+            is_supply = any(kw in item["entity_id"].lower() or kw in item["label"].lower() 
+                          for kw in ["vorlauf", "supply", "flow_temp", "tc1", "current_flow"])
+            is_return = any(kw in item["entity_id"].lower() or kw in item["label"].lower() 
+                          for kw in ["rücklauf", "return", "return_temp"])
+            
+            numeric_values = [self._point_numeric_state(p) for p in item["points"]]
+            numeric_values = [v for v in numeric_values if v is not None and v > 0]
+            
+            if is_supply and numeric_values:
+                supply_temps.extend(numeric_values)
+            elif is_return and numeric_values:
+                return_temps.extend(numeric_values)
+        
+        if supply_temps and return_temps:
+            avg_supply = np.mean(supply_temps)
+            avg_return = np.mean(return_temps)
+            spreizung = round(avg_supply - avg_return, 2)
+            metrics["spreizung_k"] = spreizung
+            
+            # Assess spreizung quality
+            if spreizung < 3:
+                metrics["spreizung_assessment"] = "Zu klein — möglicherweise zu hoher Volumenstrom"
+            elif spreizung > 8:
+                metrics["spreizung_assessment"] = "Gut für Wärmepumpe"
+            else:
+                metrics["spreizung_assessment"] = "Normal"
+        
+        # === 2. Durchschnittliche Phasenlänge & Start-Häufigkeit ===
+        compressor_status = next(
+            (s for s in status_context if "kompressor" in s["label"].lower() or "compressor" in s["entity_id"].lower()), 
+            None
+        )
+        if compressor_status:
+            windows = compressor_status.get("_windows", []) if "_windows" in compressor_status else []
+            if windows:
+                total_runtime_min = sum(duration for _, _, duration in windows)
+                phase_count = len(windows)
+                avg_phase_length_min = total_runtime_min / phase_count if phase_count > 0 else 0
+                
+                metrics["compressor_phase_count"] = phase_count
+                metrics["compressor_avg_phase_length_min"] = round(avg_phase_length_min, 1)
+                
+                # Calculate days in period
+                period_days = (end - start).days or 1
+                starts_per_day = phase_count / period_days
+                metrics["compressor_starts_per_day"] = round(starts_per_day, 2)
+                
+                # Assess cycling
+                if starts_per_day > 8:
+                    metrics["cycling_assessment"] = "Auffällig häufiges Takten"
+                elif starts_per_day > 4:
+                    metrics["cycling_assessment"] = "Erhöhte Taktung"
+                else:
+                    metrics["cycling_assessment"] = "Normal — wenig Takten"
+        
+        # === 3. DHW (WW) Anteil ===
+        dhw_status = next(
+            (s for s in status_context if any(kw in s["entity_id"].lower() or kw in s["label"].lower() 
+                                              for kw in ["ww", "dhw", "warm", "tapwater", "hot_water"])),
+            None
+        )
+        if dhw_status:
+            dhw_ratio = dhw_status.get("active_ratio", 0)
+            metrics["dhw_active_ratio"] = round(dhw_ratio * 100, 1)
+            
+            if dhw_ratio > 0.35:
+                metrics["dhw_assessment"] = "Warmwasser nimmt viel Zeit ein — WW-Solltemperatur prüfen?"
+            elif dhw_ratio > 0.15:
+                metrics["dhw_assessment"] = "Warmwasser normal"
+            else:
+                metrics["dhw_assessment"] = "Wenig Warmwasser"
+        
+        # === 4. Compressor activity ratio ===
+        if compressor_status:
+            comp_ratio = compressor_status.get("active_ratio", 0)
+            metrics["compressor_active_ratio"] = round(comp_ratio * 100, 1)
+        
+        logger.info(f"[{run_id}] Efficiency metrics calculated: {metrics}")
+        return metrics
+    
     def _count_changes(self, values: List[Any]) -> int:
         if not values:
             return 0

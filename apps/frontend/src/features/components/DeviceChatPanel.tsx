@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MessageSquareText, Send, Loader2, RefreshCw } from 'lucide-react';
+import { MessageSquareText, Send, Loader2, RefreshCw, Trash2, Clock } from 'lucide-react';
 import api from '../../lib/api';
 import MarkdownMessage from '../../components/MarkdownMessage';
 import type {
@@ -15,11 +15,25 @@ type DeviceChatPanelProps = {
   deviceId: string;
 };
 
+const CHAT_RANGES = [
+  { label: 'Letzte 24h', value: '24h' },
+  { label: 'Letzte 7 Tage', value: '7d' },
+  { label: 'Letzte 30 Tage', value: '30d' },
+];
+
+const getRangeStart = (range: string): Date => {
+  const d = new Date();
+  if (range === '24h') d.setHours(d.getHours() - 24);
+  else if (range === '7d') d.setDate(d.getDate() - 7);
+  else if (range === '30d') d.setDate(d.getDate() - 30);
+  return d;
+};
+
 const QUICK_PROMPTS = [
-  'Gab es in den letzten 24h auffaellige Betriebszustaende?',
-  'Wie verhalten sich Vorlauf, Ruecklauf und Aussentemperatur?',
-  'Gibt es Hinweise auf Takten oder unguenstige Modulation?',
-  'Welche Messwerte sollte ich als naechstes im Verlauf pruefen?',
+  'Gab es auffällige Betriebszustände im gewählten Zeitraum?',
+  'Wie verhalten sich Vorlauf, Rücklauf und Außentemperatur?',
+  'Gibt es Hinweise auf Takten oder ungünstige Modulation?',
+  'Welche Messwerte sollte ich als nächstes im Verlauf prüfen?',
 ];
 
 const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
@@ -27,6 +41,8 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<DeviceChatMessage[]>([]);
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
+  const [selectedRange, setSelectedRange] = useState<string>('24h');
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   const { data: entities } = useQuery({
     queryKey: ['device-chat-entities', deviceId],
@@ -56,7 +72,7 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
     if (!entities) return [];
     return entities
       .filter((entity) => entity.chartable || entity.domain === 'sensor' || entity.domain === 'binary_sensor')
-      .slice(0, 12);
+      .slice(0, 30);
   }, [entities]);
 
   const sendMutation = useMutation({
@@ -64,15 +80,10 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
       const response = await api.post<DeviceChatResponse>(`/chat/device/${deviceId}`, payload);
       return response.data;
     },
-    onSuccess: (data, payload) => {
+    onSuccess: (data) => {
       const nowIso = new Date().toISOString();
       setMessages((prev) => [
         ...prev,
-        {
-          role: 'user',
-          content: payload.question,
-          created_at: nowIso,
-        },
         {
           role: 'assistant',
           content: data.answer,
@@ -82,7 +93,20 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
           used_time_range: data.used_time_range,
         },
       ]);
-      setQuestion('');
+      queryClient.invalidateQueries({ queryKey: ['device-chat-history', deviceId] });
+    },
+  });
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, sendMutation.isPending]);
+
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      await api.delete(`/chat/device/${deviceId}/history`);
+    },
+    onSuccess: () => {
+      setMessages([]);
       queryClient.invalidateQueries({ queryKey: ['device-chat-history', deviceId] });
     },
   });
@@ -91,12 +115,21 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
     const trimmed = (rawQuestion ?? question).trim();
     if (!trimmed || sendMutation.isPending) return;
 
+    const nowIso = new Date().toISOString();
+    setMessages((prev) => [...prev, { role: 'user', content: trimmed, created_at: nowIso }]);
+    setQuestion('');
+
+    const rangeStart = getRangeStart(selectedRange);
+    const rangeEnd = new Date();
+
     sendMutation.mutate({
       question: trimmed,
       language: 'de',
       selected_entity_ids: selectedEntityIds,
       use_server_history: true,
       max_history_turns: 12,
+      from: rangeStart.toISOString(),
+      to: rangeEnd.toISOString(),
     });
   };
 
@@ -116,15 +149,47 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
               KI-Einsatz-Chat
             </h3>
             <p className="text-sm text-slate-500">
-              Stellt technische Fragen zum aktuellen Geraet. Antworten basieren auf den vorhandenen Messdaten.
+              Stellt technische Fragen zum aktuellen Gerät. Antworten basieren auf den vorhandenen Messdaten.
             </p>
+            <p className="text-[11px] text-blue-700 mt-1">
+              Markdown-Hinweis: KI-Antworten nutzen Ueberschriften, Listen und Fettdruck.
+            </p>
+            {/* Zeitraum-Auswahl */}
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span className="text-xs text-slate-500 font-medium">Ausgewerteter Zeitraum:</span>
+              <div className="flex gap-1 p-0.5 bg-slate-100 rounded-lg">
+                {CHAT_RANGES.map((r) => (
+                  <button
+                    key={r.value}
+                    onClick={() => setSelectedRange(r.value)}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
+                      selectedRange === r.value
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-          <button
-            onClick={() => refetch()}
-            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50"
-          >
-            <RefreshCw className="w-4 h-4" /> Verlauf aktualisieren
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => refetch()}
+              className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50"
+            >
+              <RefreshCw className="w-4 h-4" /> Verlauf aktualisieren
+            </button>
+            <button
+              onClick={() => clearMutation.mutate()}
+              disabled={messages.length === 0 || clearMutation.isPending}
+              className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {clearMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} Verlauf löschen
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -143,7 +208,7 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
         {candidateEntities.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-              Relevante Entitaeten eingrenzen (optional)
+              Relevante Entitäten eingrenzen (optional)
             </p>
             <div className="flex flex-wrap gap-2">
               {candidateEntities.map((entity) => {
@@ -173,7 +238,7 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
             <textarea
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
-              placeholder="z.B. Warum steigt der Ruecklauf in den letzten Stunden?"
+              placeholder="z.B. Warum steigt der Rücklauf in den letzten Stunden?"
               rows={3}
               className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
               onKeyDown={(event) => {
@@ -203,10 +268,10 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-        <h4 className="font-semibold text-slate-900 mb-4">Verlauf fuer dieses Geraet</h4>
+        <h4 className="font-semibold text-slate-900 mb-4">Verlauf für dieses Gerät</h4>
 
         {isHistoryLoading ? (
-          <div className="py-10 text-center text-slate-500">Verlauf wird geladen...</div>
+          <div className="py-10 text-center text-slate-500">Verlauf wird geladen…</div>
         ) : messages.length === 0 ? (
           <div className="py-10 text-center text-slate-500">Noch keine Chat-Nachrichten vorhanden.</div>
         ) : (
@@ -240,6 +305,17 @@ const DeviceChatPanel: React.FC<DeviceChatPanelProps> = ({ deviceId }) => {
                 </div>
               );
             })}
+            {sendMutation.isPending && (
+              <div className="p-3 rounded-xl border bg-slate-50 border-slate-200">
+                <span className="text-[11px] uppercase tracking-wide font-semibold opacity-60 text-slate-600">Assistent</span>
+                <div className="flex gap-1 mt-2 items-center h-5">
+                  <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
+                  <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
+                  <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
           </div>
         )}
       </div>

@@ -47,3 +47,17 @@ async def get_device_chat_history(
 
     await deps.check_tenant_access(db_device.tenant_id, current_user, db)
     return device_chat_service.get_history(current_user.id, device_id, limit=limit)
+
+
+@router.delete("/device/{device_id}/history", status_code=204)
+async def clear_device_chat_history(
+    device_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> None:
+    db_device = await device_service.get_device(db, device_id=device_id)
+    if not db_device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    await deps.check_tenant_access(db_device.tenant_id, current_user, db)
+    device_chat_service.clear_history(current_user.id, device_id)

@@ -156,6 +156,76 @@ def test_select_entities_for_fault_window_readout_includes_measurement_context()
     assert "mixer_hc2_setpoint_flow_temperature" in selected
 
 
+def test_point_numeric_state_prefers_textual_activity_over_zero_value():
+    service = HeatPumpChatService()
+
+    point = DataPoint(
+        ts="2026-04-30T09:07:27Z",
+        value=0.0,
+        state="Heizen",
+    )
+
+    assert service._point_numeric_state(point) == 1.0
+
+
+def test_detect_operating_status_category_is_dynamic_not_exact_id_based():
+    service = HeatPumpChatService()
+
+    entity = make_entity("custom_verdichter_betrieb", "Verdichter Betrieb")
+    entity.data_kind = "enum"
+    entity.render_mode = "state_timeline"
+
+    assert service._detect_operating_status_category(entity) == "compressor"
+
+
+def test_detect_operating_status_category_ignores_priority_only_flags():
+    service = HeatPumpChatService()
+
+    entity = make_entity("custom_dhw_priority", "WW Vorrang")
+    entity.data_kind = "binary"
+    entity.render_mode = "state_timeline"
+
+    assert service._detect_operating_status_category(entity) is None
+
+
+def test_extract_temperature_peak_contexts_links_peak_to_hot_water_window():
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="custom_dhw_status",
+            friendly_name="Warmwasser aktiv",
+            domain="binary_sensor",
+            data_kind="binary",
+            render_mode="state_timeline",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-30T10:00:00Z", state="0"),
+                DataPoint(ts="2026-04-30T10:10:00Z", state="1"),
+                DataPoint(ts="2026-04-30T10:40:00Z", state="0"),
+            ],
+            meta={},
+        ),
+        TimeSeriesResponse(
+            entity_id="custom_flow_temperature",
+            friendly_name="Vorlauf",
+            domain="sensor",
+            data_kind="numeric",
+            chartable=True,
+            unit_of_measurement="°C",
+            points=[
+                DataPoint(ts="2026-04-30T10:05:00Z", value=35.0),
+                DataPoint(ts="2026-04-30T10:20:00Z", value=66.4),
+                DataPoint(ts="2026-04-30T10:45:00Z", value=40.0),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._extract_temperature_peak_contexts(series)
+
+    assert any("66.4" in fact and "Warmwasser aktiv" in fact for fact in facts)
+
+
 def test_build_facts_for_time_focused_hot_water_contains_event_windows():
     service = HeatPumpChatService()
     series = [
@@ -330,6 +400,38 @@ def test_build_facts_for_temperature_comparison_shows_spreizung():
     facts_text = " ".join(facts).lower()
     # Should mention temperatures or spreizung
     assert any(word in facts_text for word in ["vorlauf", "rücklauf", "temperatur", "spreiz"])
+
+
+def test_extract_heatpump_runtime_assessment_marks_long_runs_as_positive_without_taktung_signal():
+    service = HeatPumpChatService()
+    series = [
+        TimeSeriesResponse(
+            entity_id="boiler_compressor_activity",
+            friendly_name="Kompressor aktiv",
+            domain="sensor",
+            data_kind="state",
+            chartable=True,
+            points=[
+                DataPoint(ts="2026-04-29T10:00:00Z", state="0"),
+                DataPoint(ts="2026-04-29T12:10:00Z", state="1"),
+                DataPoint(ts="2026-04-29T14:39:00Z", state="0"),
+                DataPoint(ts="2026-04-30T06:49:00Z", state="1"),
+                DataPoint(ts="2026-04-30T13:35:00Z", state="0"),
+            ],
+            meta={},
+        ),
+    ]
+
+    facts = service._extract_heatpump_runtime_assessment(
+        series,
+        datetime(2026, 4, 23, tzinfo=timezone.utc),
+        datetime(2026, 4, 30, tzinfo=timezone.utc),
+    )
+
+    joined = " ".join(facts).lower()
+    assert "starts pro tag" in joined
+    assert "grundsaetzlich positiv" in joined
+    assert "kein hinweis auf starkes takten" in joined
 
 
 def test_build_facts_for_fault_window_readout_returns_nearest_measurements():
